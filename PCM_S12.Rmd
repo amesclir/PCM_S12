@@ -3927,6 +3927,7 @@ cat("...done.\n")
 #######################################################
 library(MultinomialCI)    # For 95% CIs on BSM counts
 check_ML_vs_BSM(res, clado_events_tables, "DEC+J_M2_constrained", tr=NULL, plot_each_node=FALSE, linreg_plot=TRUE, MultinomialCI=TRUE)
+
 ```
 
 
