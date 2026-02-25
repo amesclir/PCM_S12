@@ -1,0 +1,1814 @@
+---
+title: "PCM_S12"
+author: "Marcial Escudero"
+date: "2024-01-22"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Análisis Biogeográfico con BioGeoBEARS
+
+A continuación, realizaremos los análisis biogeográficos utilizando el clado de Psychotria de Hawái (Ree & Smith, 2008). Evaluaremos y compararemos los siguientes modelos de evolución de rangos geográficos:
+
+    DEC y DEC+J
+
+    DIVALIKE y DIVALIKE+J
+
+    BAYAREALIKE y BAYAREALIKE+J
+
+Para cada uno de estos modelos, generaremos las reconstrucciones de los estados ancestrales y evaluaremos su ajuste estadístico a los datos.
+
+
+```{r}
+
+################################################################################
+# BIOGEOBEARS ANALYSIS: M0_UNCONSTRAINED
+# Models: DEC, DEC+J, DIVALIKE, DIVALIKE+J, BAYAREALIKE, BAYAREALIKE+J
+################################################################################
+
+# ------------------------------------------------------------------------------
+# 1. SETUP AND DATA LOADING
+# ------------------------------------------------------------------------------
+
+# Load required libraries
+library(rexpokit)
+library(cladoRcpp)
+library(ape)
+library(BioGeoBEARS)
+
+# Set working directory (Update this path to your actual working directory)
+wd <- normalizePath("./")
+setwd(wd)
+
+# Define file paths for the phylogeny and geography data
+# Example files are based on Hawaiian Psychotria (Ree & Smith 2008)
+trfn   <- normalizePath("./Psychotria_5.2.newick")
+geogfn <- normalizePath("./Psychotria_geog.data")
+
+# Read and inspect the phylogeny and geographic range data
+tr <- read.tree(trfn)
+tipranges <- getranges_from_LagrangePHYLIP(lgdata_fn = geogfn)
+
+# Define maximum range size (maximum number of areas a species can occupy)
+max_range_size <- 4
+
+# Location of BioGeoBEARS plot scripts
+scriptdir <- normalizePath(system.file("extdata/a_scripts", package="BioGeoBEARS"))
+
+
+# ------------------------------------------------------------------------------
+# HELPER FUNCTION FOR CLEAN INITIALIZATION
+# ------------------------------------------------------------------------------
+# This function generates a fresh, clean BioGeoBEARS run object to avoid S4 class 
+# inheritance errors when copying objects between models.
+setup_base_bgb <- function(tree_file, geog_file, max_size) {
+  bgb <- define_BioGeoBEARS_run()
+  bgb$trfn <- tree_file
+  bgb$geogfn <- geog_file
+  bgb$max_range_size <- max_size
+  bgb$speedup <- TRUE
+  bgb$use_optimx <- TRUE
+  bgb$num_cores_to_use <- 1
+  bgb$force_sparse <- FALSE
+  bgb$calc_ancprobs <- TRUE
+  bgb$return_condlikes_table <- TRUE
+  bgb$calc_TTL_loglike_from_condlikes_table <- TRUE
+  bgb <- readfiles_BioGeoBEARS_run(bgb)
+  return(bgb)
+}
+
+
+# ------------------------------------------------------------------------------
+# 2. DEC & DEC+J MODELS
+# ------------------------------------------------------------------------------
+
+# --- Run DEC ---
+bgb_dec <- setup_base_bgb(trfn, geogfn, max_range_size)
+check_BioGeoBEARS_run(bgb_dec)
+
+resfn_dec <- "Psychotria_DEC_M0_unconstrained_v1.Rdata"
+if (!file.exists(resfn_dec)) {
+  resDEC <- bears_optim_run(bgb_dec)
+  save(resDEC, file = resfn_dec)
+} else {
+  load(resfn_dec)
+}
+
+# --- Run DEC+J ---
+bgb_decj <- setup_base_bgb(trfn, geogfn, max_range_size) # Fresh initialization
+
+# Use DEC estimates as starting values for DEC+J
+dstart <- resDEC$outputs@params_table["d","est"]
+estart <- resDEC$outputs@params_table["e","est"]
+
+bgb_decj$BioGeoBEARS_model_object@params_table["d", c("init", "est")] <- dstart
+bgb_decj$BioGeoBEARS_model_object@params_table["e", c("init", "est")] <- estart
+
+# Add jump dispersal (j) as a free parameter
+bgb_decj$BioGeoBEARS_model_object@params_table["j", "type"] <- "free"
+bgb_decj$BioGeoBEARS_model_object@params_table["j", c("init", "est")] <- 0.0001
+
+check_BioGeoBEARS_run(bgb_decj)
+
+resfn_decj <- "Psychotria_DEC+J_M0_unconstrained_v1.Rdata"
+if (!file.exists(resfn_decj)) {
+  resDECj <- bears_optim_run(bgb_decj)
+  save(resDECj, file = resfn_decj)
+} else {
+  load(resfn_decj)
+}
+
+# --- Plot DEC & DEC+J ---
+pdf("Psychotria_DEC_vs_DEC+J_M0_unconstrained_v1.pdf", width=8.5, height=11)
+plot_BioGeoBEARS_results(resDEC, "BioGeoBEARS DEC on Psychotria M0_unconstrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDEC, "BioGeoBEARS DEC on Psychotria M0_unconstrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDECj, "BioGeoBEARS DEC+J on Psychotria M0_unconstrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDECj, "BioGeoBEARS DEC+J on Psychotria M0_unconstrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+dev.off()
+
+# ------------------------------------------------------------------------------
+# 3. DIVALIKE & DIVALIKE+J MODELS
+# ------------------------------------------------------------------------------
+
+# --- Run DIVALIKE ---
+bgb_diva <- setup_base_bgb(trfn, geogfn, max_range_size) 
+
+# Set up DIVALIKE specific parameters (Remove subset-sympatry)
+bgb_diva$BioGeoBEARS_model_object@params_table["s", "type"] <- "fixed"
+bgb_diva$BioGeoBEARS_model_object@params_table["s", "init"] <- 0.0
+bgb_diva$BioGeoBEARS_model_object@params_table["s", "est"] <- 0.0
+
+bgb_diva$BioGeoBEARS_model_object@params_table["ysv", "type"] <- "2-j"
+bgb_diva$BioGeoBEARS_model_object@params_table["ys", "type"] <- "ysv*1/2"
+bgb_diva$BioGeoBEARS_model_object@params_table["y", "type"] <- "ysv*1/2"
+bgb_diva$BioGeoBEARS_model_object@params_table["v", "type"] <- "ysv*1/2"
+
+# Allow classic widespread vicariance
+bgb_diva$BioGeoBEARS_model_object@params_table["mx01v", "type"] <- "fixed"
+bgb_diva$BioGeoBEARS_model_object@params_table["mx01v", "init"] <- 0.5
+bgb_diva$BioGeoBEARS_model_object@params_table["mx01v", "est"] <- 0.5
+
+check_BioGeoBEARS_run(bgb_diva)
+
+resfn_diva <- "Psychotria_DIVALIKE_M0_unconstrained_v1.Rdata"
+if (!file.exists(resfn_diva)) {
+  resDIVALIKE <- bears_optim_run(bgb_diva)
+  save(resDIVALIKE, file = resfn_diva)
+} else {
+  load(resfn_diva)
+}
+
+# --- Run DIVALIKE+J ---
+bgb_divaj <- setup_base_bgb(trfn, geogfn, max_range_size) 
+
+# Use DIVALIKE estimates as starting values
+dstart <- resDIVALIKE$outputs@params_table["d","est"]
+estart <- resDIVALIKE$outputs@params_table["e","est"]
+bgb_divaj$BioGeoBEARS_model_object@params_table["d", "init"] <- dstart
+bgb_divaj$BioGeoBEARS_model_object@params_table["d", "est"] <- dstart
+bgb_divaj$BioGeoBEARS_model_object@params_table["e", "init"] <- estart
+bgb_divaj$BioGeoBEARS_model_object@params_table["e", "est"] <- estart
+
+# Set up DIVALIKE+J specific parameters
+bgb_divaj$BioGeoBEARS_model_object@params_table["s", "type"] <- "fixed"
+bgb_divaj$BioGeoBEARS_model_object@params_table["s", "init"] <- 0.0
+bgb_divaj$BioGeoBEARS_model_object@params_table["s", "est"] <- 0.0
+
+bgb_divaj$BioGeoBEARS_model_object@params_table["ysv", "type"] <- "2-j"
+bgb_divaj$BioGeoBEARS_model_object@params_table["ys", "type"] <- "ysv*1/2"
+bgb_divaj$BioGeoBEARS_model_object@params_table["y", "type"] <- "ysv*1/2"
+bgb_divaj$BioGeoBEARS_model_object@params_table["v", "type"] <- "ysv*1/2"
+
+bgb_divaj$BioGeoBEARS_model_object@params_table["mx01v", "type"] <- "fixed"
+bgb_divaj$BioGeoBEARS_model_object@params_table["mx01v", "init"] <- 0.5
+bgb_divaj$BioGeoBEARS_model_object@params_table["mx01v", "est"] <- 0.5
+
+# Add jump dispersal (j)
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "type"] <- "free"
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "init"] <- 0.0001
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "est"] <- 0.0001
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "min"] <- 0.00001
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "max"] <- 1.99999
+
+check_BioGeoBEARS_run(bgb_divaj)
+
+resfn_divaj <- "Psychotria_DIVALIKE+J_M0_unconstrained_v1.Rdata"
+if (!file.exists(resfn_divaj)) {
+  resDIVALIKEj <- bears_optim_run(bgb_divaj)
+  save(resDIVALIKEj, file = resfn_divaj)
+} else {
+  load(resfn_divaj)
+}
+
+# --- Plot DIVALIKE & DIVALIKE+J ---
+pdf("Psychotria_DIVALIKE_vs_DIVALIKE+J_M0_unconstrained_v1.pdf", width=8.5, height=11)
+plot_BioGeoBEARS_results(resDIVALIKE, "BioGeoBEARS DIVALIKE on Psychotria M0_unconstrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDIVALIKE, "BioGeoBEARS DIVALIKE on Psychotria M0_unconstrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDIVALIKEj, "BioGeoBEARS DIVALIKE+J on Psychotria M0_unconstrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDIVALIKEj, "BioGeoBEARS DIVALIKE+J on Psychotria M0_unconstrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+dev.off()
+
+
+# ------------------------------------------------------------------------------
+# 4. BAYAREALIKE & BAYAREALIKE+J MODELS
+# ------------------------------------------------------------------------------
+
+# --- Run BAYAREALIKE ---
+bgb_bay <- setup_base_bgb(trfn, geogfn, max_range_size)
+
+# Set up BAYAREALIKE specific parameters (No subset sympatry, no vicariance)
+bgb_bay$BioGeoBEARS_model_object@params_table["s", "type"] <- "fixed"
+bgb_bay$BioGeoBEARS_model_object@params_table["s", "init"] <- 0.0
+bgb_bay$BioGeoBEARS_model_object@params_table["s", "est"] <- 0.0
+
+bgb_bay$BioGeoBEARS_model_object@params_table["v", "type"] <- "fixed"
+bgb_bay$BioGeoBEARS_model_object@params_table["v", "init"] <- 0.0
+bgb_bay$BioGeoBEARS_model_object@params_table["v", "est"] <- 0.0
+
+# Adjust linkage
+bgb_bay$BioGeoBEARS_model_object@params_table["ysv", "type"] <- "1-j"
+bgb_bay$BioGeoBEARS_model_object@params_table["ys", "type"] <- "ysv*1/1"
+bgb_bay$BioGeoBEARS_model_object@params_table["y", "type"] <- "1-j"
+
+# Only sympatric/range-copying events allowed
+bgb_bay$BioGeoBEARS_model_object@params_table["mx01y", "type"] <- "fixed"
+bgb_bay$BioGeoBEARS_model_object@params_table["mx01y", "init"] <- 0.9999
+bgb_bay$BioGeoBEARS_model_object@params_table["mx01y", "est"] <- 0.9999
+
+check_BioGeoBEARS_run(bgb_bay)
+
+resfn_bay <- "Psychotria_BAYAREALIKE_M0_unconstrained_v1.Rdata"
+if (!file.exists(resfn_bay)) {
+  resBAYAREALIKE <- bears_optim_run(bgb_bay)
+  save(resBAYAREALIKE, file = resfn_bay)
+} else {
+  load(resfn_bay)
+}
+
+# --- Run BAYAREALIKE+J ---
+bgb_bayj <- setup_base_bgb(trfn, geogfn, max_range_size)
+
+# Use BAYAREALIKE estimates as starting values
+dstart <- resBAYAREALIKE$outputs@params_table["d","est"]
+estart <- resBAYAREALIKE$outputs@params_table["e","est"]
+bgb_bayj$BioGeoBEARS_model_object@params_table["d", "init"] <- dstart
+bgb_bayj$BioGeoBEARS_model_object@params_table["d", "est"] <- dstart
+bgb_bayj$BioGeoBEARS_model_object@params_table["e", "init"] <- estart
+bgb_bayj$BioGeoBEARS_model_object@params_table["e", "est"] <- estart
+
+# Set up BAYAREALIKE+J specific parameters
+bgb_bayj$BioGeoBEARS_model_object@params_table["s", "type"] <- "fixed"
+bgb_bayj$BioGeoBEARS_model_object@params_table["s", "init"] <- 0.0
+bgb_bayj$BioGeoBEARS_model_object@params_table["s", "est"] <- 0.0
+
+bgb_bayj$BioGeoBEARS_model_object@params_table["v", "type"] <- "fixed"
+bgb_bayj$BioGeoBEARS_model_object@params_table["v", "init"] <- 0.0
+bgb_bayj$BioGeoBEARS_model_object@params_table["v", "est"] <- 0.0
+
+bgb_bayj$BioGeoBEARS_model_object@params_table["ysv", "type"] <- "1-j"
+bgb_bayj$BioGeoBEARS_model_object@params_table["ys", "type"] <- "ysv*1/1"
+bgb_bayj$BioGeoBEARS_model_object@params_table["y", "type"] <- "1-j"
+
+bgb_bayj$BioGeoBEARS_model_object@params_table["mx01y", "type"] <- "fixed"
+bgb_bayj$BioGeoBEARS_model_object@params_table["mx01y", "init"] <- 0.9999
+bgb_bayj$BioGeoBEARS_model_object@params_table["mx01y", "est"] <- 0.9999
+
+# Add jump dispersal (j)
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "type"] <- "free"
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "init"] <- 0.0001
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "est"] <- 0.0001
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "max"] <- 0.99999
+
+# Safe boundaries to prevent precision underruns in optim
+bgb_bayj$BioGeoBEARS_model_object@params_table["d", "min"] <- 0.0000001
+bgb_bayj$BioGeoBEARS_model_object@params_table["d", "max"] <- 4.9999999
+bgb_bayj$BioGeoBEARS_model_object@params_table["e", "min"] <- 0.0000001
+bgb_bayj$BioGeoBEARS_model_object@params_table["e", "max"] <- 4.9999999
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "min"] <- 0.00001
+
+check_BioGeoBEARS_run(bgb_bayj)
+
+resfn_bayj <- "Psychotria_BAYAREALIKE+J_M0_unconstrained_v1.Rdata"
+if (!file.exists(resfn_bayj)) {
+  resBAYAREALIKEj <- bears_optim_run(bgb_bayj)
+  save(resBAYAREALIKEj, file = resfn_bayj)
+} else {
+  load(resfn_bayj)
+}
+
+# --- Plot BAYAREALIKE & BAYAREALIKE+J ---
+pdf("Psychotria_BAYAREALIKE_vs_BAYAREALIKE+J_M0_unconstrained_v1.pdf", width=8.5, height=11)
+plot_BioGeoBEARS_results(resBAYAREALIKE, "BioGeoBEARS BAYAREALIKE on Psychotria M0_unconstrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resBAYAREALIKE, "BioGeoBEARS BAYAREALIKE on Psychotria M0_unconstrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resBAYAREALIKEj, "BioGeoBEARS BAYAREALIKE+J on Psychotria M0_unconstrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resBAYAREALIKEj, "BioGeoBEARS BAYAREALIKE+J on Psychotria M0_unconstrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+dev.off()
+
+
+# ------------------------------------------------------------------------------
+# 5. MODEL COMPARISON (AIC & LIKELIHOOD RATIO TESTS)
+# ------------------------------------------------------------------------------
+
+# Setup empty tables
+restable <- NULL
+teststable <- NULL
+
+# Extract parameters function wrapper for cleaner code
+extract_params <- function(res_obj) {
+  extract_params_from_BioGeoBEARS_results_object(results_object=res_obj, returnwhat="table", addl_params=c("j"), paramsstr_digits=4)
+}
+
+# DEC vs DEC+J
+LnL_dec  <- get_LnL_from_BioGeoBEARS_results_object(resDEC)
+LnL_decj <- get_LnL_from_BioGeoBEARS_results_object(resDECj)
+stats_dec <- AICstats_2models(LnL_decj, LnL_dec, 3, 2)
+restable <- rbind(restable, extract_params(resDEC), extract_params(resDECj))
+teststable <- rbind(teststable, conditional_format_table(stats_dec))
+
+# DIVALIKE vs DIVALIKE+J
+LnL_diva  <- get_LnL_from_BioGeoBEARS_results_object(resDIVALIKE)
+LnL_divaj <- get_LnL_from_BioGeoBEARS_results_object(resDIVALIKEj)
+stats_diva <- AICstats_2models(LnL_divaj, LnL_diva, 3, 2)
+restable <- rbind(restable, extract_params(resDIVALIKE), extract_params(resDIVALIKEj))
+teststable <- rbind(teststable, conditional_format_table(stats_diva))
+
+# BAYAREALIKE vs BAYAREALIKE+J
+LnL_bay  <- get_LnL_from_BioGeoBEARS_results_object(resBAYAREALIKE)
+LnL_bayj <- get_LnL_from_BioGeoBEARS_results_object(resBAYAREALIKEj)
+stats_bay <- AICstats_2models(LnL_bayj, LnL_bay, 3, 2)
+restable <- rbind(restable, extract_params(resBAYAREALIKE), extract_params(resBAYAREALIKEj))
+teststable <- rbind(teststable, conditional_format_table(stats_bay))
+
+# Format and label final results tables
+teststable$alt <- c("DEC+J", "DIVALIKE+J", "BAYAREALIKE+J")
+teststable$null <- c("DEC", "DIVALIKE", "BAYAREALIKE")
+row.names(restable) <- c("DEC", "DEC+J", "DIVALIKE", "DIVALIKE+J", "BAYAREALIKE", "BAYAREALIKE+J")
+
+# Print final results
+print(restable)
+print(teststable)
+
+# Save tables
+save(restable, file="restable_M0_unconstrained_v1.Rdata")
+save(teststable, file="teststable_M0_unconstrained_v1.Rdata")
+```
+
+
+Análisis Biogeográfico Restringido (M1_constrained)
+
+En esta segunda fase, vamos a ejecutar exactamente los mismos modelos evolutivos (DEC, DIVALIKE, BAYAREALIKE y sus variantes con salto +J), pero introduciremos una restricción biológica/geográfica: limitaremos el tamaño máximo del rango a 2 áreas (max_range_size = 2). Llamaremos a esta configuración M1_constrained.
+
+Al comparar los resultados estadísticos (AIC y LRT) de esta corrida con la anterior (M0_unconstrained), podremos evaluar si restringir el número de áreas ocupadas simultáneamente mejora el ajuste del modelo a nuestros datos de Psychotria.
+
+```{r}
+
+################################################################################
+# BIOGEOBEARS ANALYSIS: M1_CONSTRAINED
+# Models: DEC, DEC+J, DIVALIKE, DIVALIKE+J, BAYAREALIKE, BAYAREALIKE+J
+# Constraint: max_range_size = 2
+################################################################################
+
+# ------------------------------------------------------------------------------
+# 1. SETUP AND DATA LOADING
+# ------------------------------------------------------------------------------
+
+# Load required libraries
+library(rexpokit)
+library(cladoRcpp)
+library(ape)
+library(BioGeoBEARS)
+
+# Set working directory (Update this path to your actual working directory)
+wd <- normalizePath("./")
+setwd(wd)
+
+# Define file paths for the phylogeny and geography data
+trfn   <- normalizePath("./Psychotria_5.2.newick")
+geogfn <- normalizePath("./Psychotria_geog.data")
+
+# Read and inspect the phylogeny and geographic range data
+tr <- read.tree(trfn)
+tipranges <- getranges_from_LagrangePHYLIP(lgdata_fn = geogfn)
+
+# Set the maximum number of areas any species may occupy (CONSTRAINED TO 2)
+max_range_size <- 2
+
+# Location of BioGeoBEARS plot scripts
+scriptdir <- normalizePath(system.file("extdata/a_scripts", package="BioGeoBEARS"))
+
+
+# ------------------------------------------------------------------------------
+# HELPER FUNCTION FOR CLEAN INITIALIZATION
+# ------------------------------------------------------------------------------
+# This function generates a fresh, clean BioGeoBEARS run object to avoid S4 class 
+# inheritance errors when copying objects between models.
+setup_base_bgb <- function(tree_file, geog_file, max_size) {
+  bgb <- define_BioGeoBEARS_run()
+  bgb$trfn <- tree_file
+  bgb$geogfn <- geog_file
+  bgb$max_range_size <- max_size
+  bgb$speedup <- TRUE
+  bgb$use_optimx <- TRUE
+  bgb$num_cores_to_use <- 1
+  bgb$force_sparse <- FALSE
+  bgb$calc_ancprobs <- TRUE
+  bgb$return_condlikes_table <- TRUE
+  bgb$calc_TTL_loglike_from_condlikes_table <- TRUE
+  bgb <- readfiles_BioGeoBEARS_run(bgb)
+  return(bgb)
+}
+
+
+# ------------------------------------------------------------------------------
+# 2. DEC & DEC+J MODELS
+# ------------------------------------------------------------------------------
+
+# --- Run DEC ---
+bgb_dec <- setup_base_bgb(trfn, geogfn, max_range_size)
+check_BioGeoBEARS_run(bgb_dec)
+
+resfn_dec <- "Psychotria_DEC_M1_constrained_v1.Rdata"
+if (!file.exists(resfn_dec)) {
+  resDEC <- bears_optim_run(bgb_dec)
+  save(resDEC, file = resfn_dec)
+} else {
+  load(resfn_dec)
+}
+
+# --- Run DEC+J ---
+bgb_decj <- setup_base_bgb(trfn, geogfn, max_range_size) 
+
+# Use DEC estimates as starting values for DEC+J
+dstart <- resDEC$outputs@params_table["d","est"]
+estart <- resDEC$outputs@params_table["e","est"]
+
+bgb_decj$BioGeoBEARS_model_object@params_table["d", "init"] <- dstart
+bgb_decj$BioGeoBEARS_model_object@params_table["d", "est"] <- dstart
+bgb_decj$BioGeoBEARS_model_object@params_table["e", "init"] <- estart
+bgb_decj$BioGeoBEARS_model_object@params_table["e", "est"] <- estart
+
+# Add jump dispersal (j) as a free parameter
+bgb_decj$BioGeoBEARS_model_object@params_table["j", "type"] <- "free"
+bgb_decj$BioGeoBEARS_model_object@params_table["j", "init"] <- 0.0001
+bgb_decj$BioGeoBEARS_model_object@params_table["j", "est"] <- 0.0001
+
+check_BioGeoBEARS_run(bgb_decj)
+
+resfn_decj <- "Psychotria_DEC+J_M1_constrained_v1.Rdata"
+if (!file.exists(resfn_decj)) {
+  resDECj <- bears_optim_run(bgb_decj)
+  save(resDECj, file = resfn_decj)
+} else {
+  load(resfn_decj)
+}
+
+# --- Plot DEC & DEC+J ---
+pdf("Psychotria_DEC_vs_DEC+J_M1_constrained_v1.pdf", width=8.5, height=11)
+plot_BioGeoBEARS_results(resDEC, "BioGeoBEARS DEC on Psychotria M1_constrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDEC, "BioGeoBEARS DEC on Psychotria M1_constrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDECj, "BioGeoBEARS DEC+J on Psychotria M1_constrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDECj, "BioGeoBEARS DEC+J on Psychotria M1_constrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+dev.off()
+
+
+# ------------------------------------------------------------------------------
+# 3. DIVALIKE & DIVALIKE+J MODELS
+# ------------------------------------------------------------------------------
+
+# --- Run DIVALIKE ---
+bgb_diva <- setup_base_bgb(trfn, geogfn, max_range_size) 
+
+# Set up DIVALIKE specific parameters (Remove subset-sympatry)
+bgb_diva$BioGeoBEARS_model_object@params_table["s", "type"] <- "fixed"
+bgb_diva$BioGeoBEARS_model_object@params_table["s", "init"] <- 0.0
+bgb_diva$BioGeoBEARS_model_object@params_table["s", "est"] <- 0.0
+
+bgb_diva$BioGeoBEARS_model_object@params_table["ysv", "type"] <- "2-j"
+bgb_diva$BioGeoBEARS_model_object@params_table["ys", "type"] <- "ysv*1/2"
+bgb_diva$BioGeoBEARS_model_object@params_table["y", "type"] <- "ysv*1/2"
+bgb_diva$BioGeoBEARS_model_object@params_table["v", "type"] <- "ysv*1/2"
+
+# Allow classic widespread vicariance
+bgb_diva$BioGeoBEARS_model_object@params_table["mx01v", "type"] <- "fixed"
+bgb_diva$BioGeoBEARS_model_object@params_table["mx01v", "init"] <- 0.5
+bgb_diva$BioGeoBEARS_model_object@params_table["mx01v", "est"] <- 0.5
+
+check_BioGeoBEARS_run(bgb_diva)
+
+resfn_diva <- "Psychotria_DIVALIKE_M1_constrained_v1.Rdata"
+if (!file.exists(resfn_diva)) {
+  resDIVALIKE <- bears_optim_run(bgb_diva)
+  save(resDIVALIKE, file = resfn_diva)
+} else {
+  load(resfn_diva)
+}
+
+# --- Run DIVALIKE+J ---
+bgb_divaj <- setup_base_bgb(trfn, geogfn, max_range_size) 
+
+# Use DIVALIKE estimates as starting values
+dstart <- resDIVALIKE$outputs@params_table["d","est"]
+estart <- resDIVALIKE$outputs@params_table["e","est"]
+bgb_divaj$BioGeoBEARS_model_object@params_table["d", "init"] <- dstart
+bgb_divaj$BioGeoBEARS_model_object@params_table["d", "est"] <- dstart
+bgb_divaj$BioGeoBEARS_model_object@params_table["e", "init"] <- estart
+bgb_divaj$BioGeoBEARS_model_object@params_table["e", "est"] <- estart
+
+# Set up DIVALIKE+J specific parameters
+bgb_divaj$BioGeoBEARS_model_object@params_table["s", "type"] <- "fixed"
+bgb_divaj$BioGeoBEARS_model_object@params_table["s", "init"] <- 0.0
+bgb_divaj$BioGeoBEARS_model_object@params_table["s", "est"] <- 0.0
+
+bgb_divaj$BioGeoBEARS_model_object@params_table["ysv", "type"] <- "2-j"
+bgb_divaj$BioGeoBEARS_model_object@params_table["ys", "type"] <- "ysv*1/2"
+bgb_divaj$BioGeoBEARS_model_object@params_table["y", "type"] <- "ysv*1/2"
+bgb_divaj$BioGeoBEARS_model_object@params_table["v", "type"] <- "ysv*1/2"
+
+bgb_divaj$BioGeoBEARS_model_object@params_table["mx01v", "type"] <- "fixed"
+bgb_divaj$BioGeoBEARS_model_object@params_table["mx01v", "init"] <- 0.5
+bgb_divaj$BioGeoBEARS_model_object@params_table["mx01v", "est"] <- 0.5
+
+# Add jump dispersal (j)
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "type"] <- "free"
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "init"] <- 0.0001
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "est"] <- 0.0001
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "min"] <- 0.00001
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "max"] <- 1.99999
+
+check_BioGeoBEARS_run(bgb_divaj)
+
+resfn_divaj <- "Psychotria_DIVALIKE+J_M1_constrained_v1.Rdata"
+if (!file.exists(resfn_divaj)) {
+  resDIVALIKEj <- bears_optim_run(bgb_divaj)
+  save(resDIVALIKEj, file = resfn_divaj)
+} else {
+  load(resfn_divaj)
+}
+
+# --- Plot DIVALIKE & DIVALIKE+J ---
+pdf("Psychotria_DIVALIKE_vs_DIVALIKE+J_M1_constrained_v1.pdf", width=8.5, height=11)
+plot_BioGeoBEARS_results(resDIVALIKE, "BioGeoBEARS DIVALIKE on Psychotria M1_constrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDIVALIKE, "BioGeoBEARS DIVALIKE on Psychotria M1_constrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDIVALIKEj, "BioGeoBEARS DIVALIKE+J on Psychotria M1_constrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDIVALIKEj, "BioGeoBEARS DIVALIKE+J on Psychotria M1_constrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+dev.off()
+
+
+# ------------------------------------------------------------------------------
+# 4. BAYAREALIKE & BAYAREALIKE+J MODELS
+# ------------------------------------------------------------------------------
+
+# --- Run BAYAREALIKE ---
+bgb_bay <- setup_base_bgb(trfn, geogfn, max_range_size)
+
+# Set up BAYAREALIKE specific parameters (No subset sympatry, no vicariance)
+bgb_bay$BioGeoBEARS_model_object@params_table["s", "type"] <- "fixed"
+bgb_bay$BioGeoBEARS_model_object@params_table["s", "init"] <- 0.0
+bgb_bay$BioGeoBEARS_model_object@params_table["s", "est"] <- 0.0
+
+bgb_bay$BioGeoBEARS_model_object@params_table["v", "type"] <- "fixed"
+bgb_bay$BioGeoBEARS_model_object@params_table["v", "init"] <- 0.0
+bgb_bay$BioGeoBEARS_model_object@params_table["v", "est"] <- 0.0
+
+# Adjust linkage
+bgb_bay$BioGeoBEARS_model_object@params_table["ysv", "type"] <- "1-j"
+bgb_bay$BioGeoBEARS_model_object@params_table["ys", "type"] <- "ysv*1/1"
+bgb_bay$BioGeoBEARS_model_object@params_table["y", "type"] <- "1-j"
+
+# Only sympatric/range-copying events allowed
+bgb_bay$BioGeoBEARS_model_object@params_table["mx01y", "type"] <- "fixed"
+bgb_bay$BioGeoBEARS_model_object@params_table["mx01y", "init"] <- 0.9999
+bgb_bay$BioGeoBEARS_model_object@params_table["mx01y", "est"] <- 0.9999
+
+check_BioGeoBEARS_run(bgb_bay)
+
+resfn_bay <- "Psychotria_BAYAREALIKE_M1_constrained_v1.Rdata"
+if (!file.exists(resfn_bay)) {
+  resBAYAREALIKE <- bears_optim_run(bgb_bay)
+  save(resBAYAREALIKE, file = resfn_bay)
+} else {
+  load(resfn_bay)
+}
+
+# --- Run BAYAREALIKE+J ---
+bgb_bayj <- setup_base_bgb(trfn, geogfn, max_range_size)
+
+# Use BAYAREALIKE estimates as starting values
+dstart <- resBAYAREALIKE$outputs@params_table["d","est"]
+estart <- resBAYAREALIKE$outputs@params_table["e","est"]
+bgb_bayj$BioGeoBEARS_model_object@params_table["d", "init"] <- dstart
+bgb_bayj$BioGeoBEARS_model_object@params_table["d", "est"] <- dstart
+bgb_bayj$BioGeoBEARS_model_object@params_table["e", "init"] <- estart
+bgb_bayj$BioGeoBEARS_model_object@params_table["e", "est"] <- estart
+
+# Set up BAYAREALIKE+J specific parameters
+bgb_bayj$BioGeoBEARS_model_object@params_table["s", "type"] <- "fixed"
+bgb_bayj$BioGeoBEARS_model_object@params_table["s", "init"] <- 0.0
+bgb_bayj$BioGeoBEARS_model_object@params_table["s", "est"] <- 0.0
+
+bgb_bayj$BioGeoBEARS_model_object@params_table["v", "type"] <- "fixed"
+bgb_bayj$BioGeoBEARS_model_object@params_table["v", "init"] <- 0.0
+bgb_bayj$BioGeoBEARS_model_object@params_table["v", "est"] <- 0.0
+
+bgb_bayj$BioGeoBEARS_model_object@params_table["ysv", "type"] <- "1-j"
+bgb_bayj$BioGeoBEARS_model_object@params_table["ys", "type"] <- "ysv*1/1"
+bgb_bayj$BioGeoBEARS_model_object@params_table["y", "type"] <- "1-j"
+
+bgb_bayj$BioGeoBEARS_model_object@params_table["mx01y", "type"] <- "fixed"
+bgb_bayj$BioGeoBEARS_model_object@params_table["mx01y", "init"] <- 0.9999
+bgb_bayj$BioGeoBEARS_model_object@params_table["mx01y", "est"] <- 0.9999
+
+# Add jump dispersal (j)
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "type"] <- "free"
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "init"] <- 0.0001
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "est"] <- 0.0001
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "max"] <- 0.99999
+
+# Safe boundaries to prevent precision underruns in optim
+bgb_bayj$BioGeoBEARS_model_object@params_table["d", "min"] <- 0.0000001
+bgb_bayj$BioGeoBEARS_model_object@params_table["d", "max"] <- 4.9999999
+bgb_bayj$BioGeoBEARS_model_object@params_table["e", "min"] <- 0.0000001
+bgb_bayj$BioGeoBEARS_model_object@params_table["e", "max"] <- 4.9999999
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "min"] <- 0.00001
+
+check_BioGeoBEARS_run(bgb_bayj)
+
+resfn_bayj <- "Psychotria_BAYAREALIKE+J_M1_constrained_v1.Rdata"
+if (!file.exists(resfn_bayj)) {
+  resBAYAREALIKEj <- bears_optim_run(bgb_bayj)
+  save(resBAYAREALIKEj, file = resfn_bayj)
+} else {
+  load(resfn_bayj)
+}
+
+# --- Plot BAYAREALIKE & BAYAREALIKE+J ---
+pdf("Psychotria_BAYAREALIKE_vs_BAYAREALIKE+J_M1_constrained_v1.pdf", width=8.5, height=11)
+plot_BioGeoBEARS_results(resBAYAREALIKE, "BioGeoBEARS BAYAREALIKE on Psychotria M1_constrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resBAYAREALIKE, "BioGeoBEARS BAYAREALIKE on Psychotria M1_constrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resBAYAREALIKEj, "BioGeoBEARS BAYAREALIKE+J on Psychotria M1_constrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resBAYAREALIKEj, "BioGeoBEARS BAYAREALIKE+J on Psychotria M1_constrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+dev.off()
+
+
+# ------------------------------------------------------------------------------
+# 5. MODEL COMPARISON (AIC & LIKELIHOOD RATIO TESTS)
+# ------------------------------------------------------------------------------
+
+# Setup empty tables
+restable <- NULL
+teststable <- NULL
+
+# Extract parameters function wrapper for cleaner code
+extract_params <- function(res_obj) {
+  extract_params_from_BioGeoBEARS_results_object(results_object=res_obj, returnwhat="table", addl_params=c("j"), paramsstr_digits=4)
+}
+
+# DEC vs DEC+J
+LnL_dec  <- get_LnL_from_BioGeoBEARS_results_object(resDEC)
+LnL_decj <- get_LnL_from_BioGeoBEARS_results_object(resDECj)
+stats_dec <- AICstats_2models(LnL_decj, LnL_dec, 3, 2)
+restable <- rbind(restable, extract_params(resDEC), extract_params(resDECj))
+teststable <- rbind(teststable, conditional_format_table(stats_dec))
+
+# DIVALIKE vs DIVALIKE+J
+LnL_diva  <- get_LnL_from_BioGeoBEARS_results_object(resDIVALIKE)
+LnL_divaj <- get_LnL_from_BioGeoBEARS_results_object(resDIVALIKEj)
+stats_diva <- AICstats_2models(LnL_divaj, LnL_diva, 3, 2)
+restable <- rbind(restable, extract_params(resDIVALIKE), extract_params(resDIVALIKEj))
+teststable <- rbind(teststable, conditional_format_table(stats_diva))
+
+# BAYAREALIKE vs BAYAREALIKE+J
+LnL_bay  <- get_LnL_from_BioGeoBEARS_results_object(resBAYAREALIKE)
+LnL_bayj <- get_LnL_from_BioGeoBEARS_results_object(resBAYAREALIKEj)
+stats_bay <- AICstats_2models(LnL_bayj, LnL_bay, 3, 2)
+restable <- rbind(restable, extract_params(resBAYAREALIKE), extract_params(resBAYAREALIKEj))
+teststable <- rbind(teststable, conditional_format_table(stats_bay))
+
+# Format and label final results tables
+teststable$alt <- c("DEC+J", "DIVALIKE+J", "BAYAREALIKE+J")
+teststable$null <- c("DEC", "DIVALIKE", "BAYAREALIKE")
+row.names(restable) <- c("DEC", "DEC+J", "DIVALIKE", "DIVALIKE+J", "BAYAREALIKE", "BAYAREALIKE+J")
+
+# Print final results
+print(restable)
+print(teststable)
+
+# Save tables
+save(restable, file="restable_M1_constrained_v1.Rdata")
+save(teststable, file="teststable_M1_constrained_v1.Rdata")
+
+```
+
+
+Análisis Biogeográfico con Restricción Espacial (M2_constrained - Stepping Stones)
+
+En esta tercera iteración, ejecutaremos nuevamente la batería de modelos (DEC, DIVALIKE, BAYAREALIKE y sus variantes +J), pero esta vez bajo un modelo de "stepping stones" (islas puente).
+
+En este escenario, aplicaremos dos restricciones fundamentales para reflejar la geología del archipiélago de Hawái:
+
+    Restricción de tamaño de rango: Limitaremos el tamaño máximo del rango a 2 áreas (max_range_size = 2), igual que en el modelo M1.
+
+    Restricción direccional de dispersión: Proveeremos una matriz de multiplicadores de dispersión (Psychotria-steppingstone-dispersal.txt). Esta matriz establece que las transiciones solo son posibles entre islas geográficamente adyacentes y, además, siguen una direccionalidad estricta desde las islas más antiguas hacia las más nuevas (de este a oeste).
+
+Llamaremos a esta configuración M2_constrained
+
+```{r}
+
+################################################################################
+# BIOGEOBEARS ANALYSIS: M2_CONSTRAINED (STEPPING STONES)
+# Models: DEC, DEC+J, DIVALIKE, DIVALIKE+J, BAYAREALIKE, BAYAREALIKE+J
+# Constraints: max_range_size = 2 AND stepping-stone dispersal matrix
+################################################################################
+
+# ------------------------------------------------------------------------------
+# 1. SETUP AND DATA LOADING
+# ------------------------------------------------------------------------------
+
+# Load required libraries
+library(rexpokit)
+library(cladoRcpp)
+library(ape)
+library(BioGeoBEARS)
+
+# Set working directory (Update this path to your actual working directory)
+wd <- normalizePath("./")
+setwd(wd)
+
+# Define file paths for the phylogeny, geography data, and dispersal matrix
+trfn   <- normalizePath("./Psychotria_5.2.newick")
+geogfn <- normalizePath("./Psychotria_geog.data")
+disp_matrix_fn <- "Psychotria-steppingstone-dispersal.txt" # Make sure this file is in your working directory
+
+# Read and inspect the phylogeny and geographic range data
+tr <- read.tree(trfn)
+tipranges <- getranges_from_LagrangePHYLIP(lgdata_fn = geogfn)
+
+# Set the maximum number of areas any species may occupy (CONSTRAINED TO 2)
+max_range_size <- 2
+
+# INTERRUPTOR CLAVE: Forzar recálculo para ignorar la caché de errores previos
+force_recalculate <- TRUE 
+
+# Location of BioGeoBEARS plot scripts
+scriptdir <- normalizePath(system.file("extdata/a_scripts", package="BioGeoBEARS"))
+
+
+# ------------------------------------------------------------------------------
+# HELPER FUNCTION FOR CLEAN INITIALIZATION WITH DISPERSAL MATRIX
+# ------------------------------------------------------------------------------
+# This function generates a fresh, clean BioGeoBEARS run object including the 
+# stepping-stone dispersal matrix.
+# FUNCIÓN CORREGIDA PARA M2
+setup_base_bgb_M2 <- function(tree_file, geog_file, max_size, disp_file) {
+  bgb <- define_BioGeoBEARS_run()
+  bgb$trfn <- tree_file
+  bgb$geogfn <- geog_file
+  bgb$max_range_size <- max_size
+  
+  # Asignamos el archivo ANTES de leer
+  bgb$dispersal_multipliers_fn <- disp_file 
+  
+  bgb$speedup <- TRUE
+  bgb$use_optimx <- TRUE
+  bgb$num_cores_to_use <- 1
+  bgb$force_sparse <- FALSE
+  bgb$calc_ancprobs <- TRUE
+  bgb$return_condlikes_table <- TRUE
+  bgb$calc_TTL_loglike_from_condlikes_table <- TRUE
+  
+  # AHORA LEEMOS LOS ARCHIVOS (incluyendo la matriz de dispersión)
+  bgb <- readfiles_BioGeoBEARS_run(bgb)
+  return(bgb)
+}
+
+
+# ------------------------------------------------------------------------------
+# 2. DEC & DEC+J MODELS
+# ------------------------------------------------------------------------------
+
+# --- Run DEC ---
+bgb_dec <- setup_base_bgb_M2(trfn, geogfn, max_range_size, disp_matrix_fn)
+check_BioGeoBEARS_run(bgb_dec)
+
+resfn_dec <- "Psychotria_DEC_M2_constrained_v1.Rdata"
+if (!file.exists(resfn_dec) | force_recalculate) {
+  resDEC <- bears_optim_run(bgb_dec)
+  save(resDEC, file = resfn_dec)
+} else {
+  load(resfn_dec)
+}
+
+# --- Run DEC+J ---
+bgb_decj <- setup_base_bgb_M2(trfn, geogfn, max_range_size, disp_matrix_fn) 
+
+# Use DEC estimates as starting values for DEC+J
+dstart <- resDEC$outputs@params_table["d","est"]
+estart <- resDEC$outputs@params_table["e","est"]
+
+bgb_decj$BioGeoBEARS_model_object@params_table["d", "init"] <- dstart
+bgb_decj$BioGeoBEARS_model_object@params_table["d", "est"] <- dstart
+bgb_decj$BioGeoBEARS_model_object@params_table["e", "init"] <- estart
+bgb_decj$BioGeoBEARS_model_object@params_table["e", "est"] <- estart
+
+# Add jump dispersal (j) as a free parameter
+bgb_decj$BioGeoBEARS_model_object@params_table["j", "type"] <- "free"
+bgb_decj$BioGeoBEARS_model_object@params_table["j", "init"] <- 0.0001
+bgb_decj$BioGeoBEARS_model_object@params_table["j", "est"] <- 0.0001
+
+check_BioGeoBEARS_run(bgb_decj)
+
+resfn_decj <- "Psychotria_DEC+J_M2_constrained_v1.Rdata"
+if (!file.exists(resfn_decj) | force_recalculate) {
+  resDECj <- bears_optim_run(bgb_decj)
+  save(resDECj, file = resfn_decj)
+} else {
+  load(resfn_decj)
+}
+
+# --- Plot DEC & DEC+J ---
+pdf("Psychotria_DEC_vs_DEC+J_M2_constrained_v1.pdf", width=8.5, height=11)
+plot_BioGeoBEARS_results(resDEC, "BioGeoBEARS DEC on Psychotria M2_constrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDEC, "BioGeoBEARS DEC on Psychotria M2_constrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDECj, "BioGeoBEARS DEC+J on Psychotria M2_constrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDECj, "BioGeoBEARS DEC+J on Psychotria M2_constrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+dev.off()
+
+
+# ------------------------------------------------------------------------------
+# 3. DIVALIKE & DIVALIKE+J MODELS
+# ------------------------------------------------------------------------------
+
+# --- Run DIVALIKE ---
+bgb_diva <- setup_base_bgb_M2(trfn, geogfn, max_range_size, disp_matrix_fn) 
+
+# Set up DIVALIKE specific parameters (Remove subset-sympatry)
+bgb_diva$BioGeoBEARS_model_object@params_table["s", "type"] <- "fixed"
+bgb_diva$BioGeoBEARS_model_object@params_table["s", "init"] <- 0.0
+bgb_diva$BioGeoBEARS_model_object@params_table["s", "est"] <- 0.0
+
+bgb_diva$BioGeoBEARS_model_object@params_table["ysv", "type"] <- "2-j"
+bgb_diva$BioGeoBEARS_model_object@params_table["ys", "type"] <- "ysv*1/2"
+bgb_diva$BioGeoBEARS_model_object@params_table["y", "type"] <- "ysv*1/2"
+bgb_diva$BioGeoBEARS_model_object@params_table["v", "type"] <- "ysv*1/2"
+
+# Allow classic widespread vicariance
+bgb_diva$BioGeoBEARS_model_object@params_table["mx01v", "type"] <- "fixed"
+bgb_diva$BioGeoBEARS_model_object@params_table["mx01v", "init"] <- 0.5
+bgb_diva$BioGeoBEARS_model_object@params_table["mx01v", "est"] <- 0.5
+
+check_BioGeoBEARS_run(bgb_diva)
+
+resfn_diva <- "Psychotria_DIVALIKE_M2_constrained_v1.Rdata"
+if (!file.exists(resfn_diva) | force_recalculate) {
+  resDIVALIKE <- bears_optim_run(bgb_diva)
+  save(resDIVALIKE, file = resfn_diva)
+} else {
+  load(resfn_diva)
+}
+
+# --- Run DIVALIKE+J ---
+bgb_divaj <- setup_base_bgb_M2(trfn, geogfn, max_range_size, disp_matrix_fn) 
+
+# Use DIVALIKE estimates as starting values
+dstart <- resDIVALIKE$outputs@params_table["d","est"]
+estart <- resDIVALIKE$outputs@params_table["e","est"]
+bgb_divaj$BioGeoBEARS_model_object@params_table["d", "init"] <- dstart
+bgb_divaj$BioGeoBEARS_model_object@params_table["d", "est"] <- dstart
+bgb_divaj$BioGeoBEARS_model_object@params_table["e", "init"] <- estart
+bgb_divaj$BioGeoBEARS_model_object@params_table["e", "est"] <- estart
+
+# Set up DIVALIKE+J specific parameters
+bgb_divaj$BioGeoBEARS_model_object@params_table["s", "type"] <- "fixed"
+bgb_divaj$BioGeoBEARS_model_object@params_table["s", "init"] <- 0.0
+bgb_divaj$BioGeoBEARS_model_object@params_table["s", "est"] <- 0.0
+
+bgb_divaj$BioGeoBEARS_model_object@params_table["ysv", "type"] <- "2-j"
+bgb_divaj$BioGeoBEARS_model_object@params_table["ys", "type"] <- "ysv*1/2"
+bgb_divaj$BioGeoBEARS_model_object@params_table["y", "type"] <- "ysv*1/2"
+bgb_divaj$BioGeoBEARS_model_object@params_table["v", "type"] <- "ysv*1/2"
+
+bgb_divaj$BioGeoBEARS_model_object@params_table["mx01v", "type"] <- "fixed"
+bgb_divaj$BioGeoBEARS_model_object@params_table["mx01v", "init"] <- 0.5
+bgb_divaj$BioGeoBEARS_model_object@params_table["mx01v", "est"] <- 0.5
+
+# Add jump dispersal (j)
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "type"] <- "free"
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "init"] <- 0.0001
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "est"] <- 0.0001
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "min"] <- 0.00001
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "max"] <- 1.99999
+
+check_BioGeoBEARS_run(bgb_divaj)
+
+resfn_divaj <- "Psychotria_DIVALIKE+J_M2_constrained_v1.Rdata"
+if (!file.exists(resfn_divaj) | force_recalculate) {
+  resDIVALIKEj <- bears_optim_run(bgb_divaj)
+  save(resDIVALIKEj, file = resfn_divaj)
+} else {
+  load(resfn_divaj)
+}
+
+# --- Plot DIVALIKE & DIVALIKE+J ---
+pdf("Psychotria_DIVALIKE_vs_DIVALIKE+J_M2_constrained_v1.pdf", width=8.5, height=11)
+plot_BioGeoBEARS_results(resDIVALIKE, "BioGeoBEARS DIVALIKE on Psychotria M2_constrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDIVALIKE, "BioGeoBEARS DIVALIKE on Psychotria M2_constrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDIVALIKEj, "BioGeoBEARS DIVALIKE+J on Psychotria M2_constrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDIVALIKEj, "BioGeoBEARS DIVALIKE+J on Psychotria M2_constrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+dev.off()
+
+
+# ------------------------------------------------------------------------------
+# 4. BAYAREALIKE & BAYAREALIKE+J MODELS
+# ------------------------------------------------------------------------------
+
+# --- Run BAYAREALIKE ---
+bgb_bay <- setup_base_bgb_M2(trfn, geogfn, max_range_size, disp_matrix_fn)
+
+# Set up BAYAREALIKE specific parameters (No subset sympatry, no vicariance)
+bgb_bay$BioGeoBEARS_model_object@params_table["s", "type"] <- "fixed"
+bgb_bay$BioGeoBEARS_model_object@params_table["s", "init"] <- 0.0
+bgb_bay$BioGeoBEARS_model_object@params_table["s", "est"] <- 0.0
+
+bgb_bay$BioGeoBEARS_model_object@params_table["v", "type"] <- "fixed"
+bgb_bay$BioGeoBEARS_model_object@params_table["v", "init"] <- 0.0
+bgb_bay$BioGeoBEARS_model_object@params_table["v", "est"] <- 0.0
+
+# Adjust linkage
+bgb_bay$BioGeoBEARS_model_object@params_table["ysv", "type"] <- "1-j"
+bgb_bay$BioGeoBEARS_model_object@params_table["ys", "type"] <- "ysv*1/1"
+bgb_bay$BioGeoBEARS_model_object@params_table["y", "type"] <- "1-j"
+
+# Only sympatric/range-copying events allowed
+bgb_bay$BioGeoBEARS_model_object@params_table["mx01y", "type"] <- "fixed"
+bgb_bay$BioGeoBEARS_model_object@params_table["mx01y", "init"] <- 0.9999
+bgb_bay$BioGeoBEARS_model_object@params_table["mx01y", "est"] <- 0.9999
+
+check_BioGeoBEARS_run(bgb_bay)
+
+resfn_bay <- "Psychotria_BAYAREALIKE_M2_constrained_v1.Rdata"
+if (!file.exists(resfn_bay) | force_recalculate) {
+  resBAYAREALIKE <- bears_optim_run(bgb_bay)
+  save(resBAYAREALIKE, file = resfn_bay)
+} else {
+  load(resfn_bay)
+}
+
+# --- Run BAYAREALIKE+J ---
+bgb_bayj <- setup_base_bgb_M2(trfn, geogfn, max_range_size, disp_matrix_fn)
+
+# Use BAYAREALIKE estimates as starting values
+dstart <- resBAYAREALIKE$outputs@params_table["d","est"]
+estart <- resBAYAREALIKE$outputs@params_table["e","est"]
+bgb_bayj$BioGeoBEARS_model_object@params_table["d", "init"] <- dstart
+bgb_bayj$BioGeoBEARS_model_object@params_table["d", "est"] <- dstart
+bgb_bayj$BioGeoBEARS_model_object@params_table["e", "init"] <- estart
+bgb_bayj$BioGeoBEARS_model_object@params_table["e", "est"] <- estart
+
+# Set up BAYAREALIKE+J specific parameters
+bgb_bayj$BioGeoBEARS_model_object@params_table["s", "type"] <- "fixed"
+bgb_bayj$BioGeoBEARS_model_object@params_table["s", "init"] <- 0.0
+bgb_bayj$BioGeoBEARS_model_object@params_table["s", "est"] <- 0.0
+
+bgb_bayj$BioGeoBEARS_model_object@params_table["v", "type"] <- "fixed"
+bgb_bayj$BioGeoBEARS_model_object@params_table["v", "init"] <- 0.0
+bgb_bayj$BioGeoBEARS_model_object@params_table["v", "est"] <- 0.0
+
+bgb_bayj$BioGeoBEARS_model_object@params_table["ysv", "type"] <- "1-j"
+bgb_bayj$BioGeoBEARS_model_object@params_table["ys", "type"] <- "ysv*1/1"
+bgb_bayj$BioGeoBEARS_model_object@params_table["y", "type"] <- "1-j"
+
+bgb_bayj$BioGeoBEARS_model_object@params_table["mx01y", "type"] <- "fixed"
+bgb_bayj$BioGeoBEARS_model_object@params_table["mx01y", "init"] <- 0.9999
+bgb_bayj$BioGeoBEARS_model_object@params_table["mx01y", "est"] <- 0.9999
+
+# Add jump dispersal (j)
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "type"] <- "free"
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "init"] <- 0.0001
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "est"] <- 0.0001
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "max"] <- 0.99999
+
+# Safe boundaries to prevent precision underruns in optim
+bgb_bayj$BioGeoBEARS_model_object@params_table["d", "min"] <- 0.0000001
+bgb_bayj$BioGeoBEARS_model_object@params_table["d", "max"] <- 4.9999999
+bgb_bayj$BioGeoBEARS_model_object@params_table["e", "min"] <- 0.0000001
+bgb_bayj$BioGeoBEARS_model_object@params_table["e", "max"] <- 4.9999999
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "min"] <- 0.00001
+
+check_BioGeoBEARS_run(bgb_bayj)
+
+resfn_bayj <- "Psychotria_BAYAREALIKE+J_M2_constrained_v1.Rdata"
+if (!file.exists(resfn_bayj) | force_recalculate) {
+  resBAYAREALIKEj <- bears_optim_run(bgb_bayj)
+  save(resBAYAREALIKEj, file = resfn_bayj)
+} else {
+  load(resfn_bayj)
+}
+
+# --- Plot BAYAREALIKE & BAYAREALIKE+J ---
+pdf("Psychotria_BAYAREALIKE_vs_BAYAREALIKE+J_M2_constrained_v1.pdf", width=8.5, height=11)
+plot_BioGeoBEARS_results(resBAYAREALIKE, "BioGeoBEARS BAYAREALIKE on Psychotria M2_constrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resBAYAREALIKE, "BioGeoBEARS BAYAREALIKE on Psychotria M2_constrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resBAYAREALIKEj, "BioGeoBEARS BAYAREALIKE+J on Psychotria M2_constrained", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resBAYAREALIKEj, "BioGeoBEARS BAYAREALIKE+J on Psychotria M2_constrained", addl_params=list("j"), plotwhat="pie", cornercoords_loc=scriptdir, tr=tr, tipranges=tipranges)
+dev.off()
+
+
+# ------------------------------------------------------------------------------
+# 5. MODEL COMPARISON (AIC & LIKELIHOOD RATIO TESTS)
+# ------------------------------------------------------------------------------
+
+# Setup empty tables
+restable <- NULL
+teststable <- NULL
+
+# Extract parameters function wrapper for cleaner code
+extract_params <- function(res_obj) {
+  extract_params_from_BioGeoBEARS_results_object(results_object=res_obj, returnwhat="table", addl_params=c("j"), paramsstr_digits=4)
+}
+
+# DEC vs DEC+J
+LnL_dec  <- get_LnL_from_BioGeoBEARS_results_object(resDEC)
+LnL_decj <- get_LnL_from_BioGeoBEARS_results_object(resDECj)
+stats_dec <- AICstats_2models(LnL_decj, LnL_dec, 3, 2)
+restable <- rbind(restable, extract_params(resDEC), extract_params(resDECj))
+teststable <- rbind(teststable, conditional_format_table(stats_dec))
+
+# DIVALIKE vs DIVALIKE+J
+LnL_diva  <- get_LnL_from_BioGeoBEARS_results_object(resDIVALIKE)
+LnL_divaj <- get_LnL_from_BioGeoBEARS_results_object(resDIVALIKEj)
+stats_diva <- AICstats_2models(LnL_divaj, LnL_diva, 3, 2)
+restable <- rbind(restable, extract_params(resDIVALIKE), extract_params(resDIVALIKEj))
+teststable <- rbind(teststable, conditional_format_table(stats_diva))
+
+# BAYAREALIKE vs BAYAREALIKE+J
+LnL_bay  <- get_LnL_from_BioGeoBEARS_results_object(resBAYAREALIKE)
+LnL_bayj <- get_LnL_from_BioGeoBEARS_results_object(resBAYAREALIKEj)
+stats_bay <- AICstats_2models(LnL_bayj, LnL_bay, 3, 2)
+restable <- rbind(restable, extract_params(resBAYAREALIKE), extract_params(resBAYAREALIKEj))
+teststable <- rbind(teststable, conditional_format_table(stats_bay))
+
+# Format and label final results tables
+teststable$alt <- c("DEC+J", "DIVALIKE+J", "BAYAREALIKE+J")
+teststable$null <- c("DEC", "DIVALIKE", "BAYAREALIKE")
+row.names(restable) <- c("DEC", "DEC+J", "DIVALIKE", "DIVALIKE+J", "BAYAREALIKE", "BAYAREALIKE+J")
+
+# Print final results
+print(restable)
+print(teststable)
+
+# Save tables
+save(restable, file="restable_M2_constrained_v1.Rdata")
+save(teststable, file="teststable_M2_constrained_v1.Rdata")
+
+```
+
+Análisis Biogeográfico Estratificado en el Tiempo y Mapeo Estocástico
+
+En esta última etapa, vamos a implementar un modelo estratificado en el tiempo (M3_stratified). Esto significa que las dinámicas del modelo cambiarán en diferentes periodos temporales de la filogenia. Específicamente, restringiremos el modelo para que la dispersión a ciertas islas solo sea posible después de que estas hayan emergido geológicamente.
+
+Existen varias formas de introducir estas restricciones biológicas y geológicas en BioGeoBEARS:
+
+    Matriz de áreas permitidas (areas_allowed_fn): Permite o prohíbe la presencia en ciertas áreas dependiendo del estrato temporal (la que usaremos aquí).
+
+    Matriz de adyacencia: Indica las probabilidades de dispersión entre áreas (valores de 0 a 1). Como esto puede ser subjetivo, se puede estimar un parámetro w que ajusta dicha matriz durante el análisis.
+
+    Matriz de distancias: Modela la probabilidad de dispersión en función de la distancia física. También se puede ajustar estimando un parámetro x que modifica el efecto de estas distancias.
+
+(Para más detalles sobre estos modelos avanzados, puedes consultar la wiki oficial: http://phylo.wikidot.com/biogeobears).
+
+
+```{r}
+
+# Set the maximum number of areas any species may occupy
+max_range_size <- 2
+
+# INTERRUPTOR CLAVE: Forzar recálculo para ignorar la caché de errores previos
+force_recalculate <- TRUE 
+
+# ------------------------------------------------------------------------------
+# FUNCIÓN AUXILIAR PARA INICIALIZACIÓN ESTRATIFICADA
+# ------------------------------------------------------------------------------
+# FUNCIÓN CORREGIDA PARA M3
+setup_base_bgb_M3 <- function(tree_file, geog_file, max_size) {
+  bgb <- define_BioGeoBEARS_run()
+  bgb$trfn <- tree_file
+  bgb$geogfn <- geog_file
+  bgb$max_range_size <- max_size
+  
+  # Asignamos TODOS los archivos de estratificación ANTES de leer
+  bgb$timesfn <- "timeperiods.txt"
+  bgb$areas_allowed_fn <- "Psychotria-stratified-dispersal.txt"
+  # NOTA: En modelos estratificados, BioGeoBEARS suele requerir que definamos
+  # la matriz de adyacencia o distancias para cada estrato, o al menos
+  # que la matriz base sea explícita.
+  
+  bgb$speedup <- TRUE
+  bgb$use_optimx <- TRUE
+  bgb$num_cores_to_use <- 1
+  bgb$force_sparse <- FALSE
+  bgb$calc_ancprobs <- TRUE
+  bgb$return_condlikes_table <- TRUE
+  bgb$calc_TTL_loglike_from_condlikes_table <- TRUE
+  
+  # AHORA LEEMOS LOS ARCHIVOS
+  bgb <- readfiles_BioGeoBEARS_run(bgb)
+  
+  # SECCIONAMOS EL ÁRBOL (Requisito estricto de M3)
+  bgb <- section_the_tree(inputs=bgb, make_master_table=TRUE, plot_pieces=FALSE)
+  
+  return(bgb)
+}
+
+
+# Define script directory for plots
+scriptdir <- normalizePath(system.file("extdata/a_scripts", package="BioGeoBEARS"))
+
+#######################################################
+# DEC AND DEC+J ANALYSIS
+#######################################################
+
+# --- Run DEC ---
+bgb_dec <- setup_base_bgb_M3(trfn, geogfn, max_range_size)
+check_BioGeoBEARS_run(bgb_dec)
+
+resfn_dec <- "Psychotria_DEC_M3_constrained_v1.Rdata"
+if (!file.exists(resfn_dec) | force_recalculate) {
+  resDEC <- bears_optim_run(bgb_dec)
+  save(resDEC, file=resfn_dec)
+} else {
+  load(resfn_dec)
+}
+
+# --- Run DEC+J ---
+bgb_decj <- setup_base_bgb_M3(trfn, geogfn, max_range_size)
+
+dstart <- resDEC$outputs@params_table["d","est"]
+estart <- resDEC$outputs@params_table["e","est"]
+
+bgb_decj$BioGeoBEARS_model_object@params_table["d", "init"] <- dstart
+bgb_decj$BioGeoBEARS_model_object@params_table["d", "est"] <- dstart
+bgb_decj$BioGeoBEARS_model_object@params_table["e", "init"] <- estart
+bgb_decj$BioGeoBEARS_model_object@params_table["e", "est"] <- estart
+
+bgb_decj$BioGeoBEARS_model_object@params_table["j", "type"] <- "free"
+bgb_decj$BioGeoBEARS_model_object@params_table["j", "init"] <- 0.0001
+bgb_decj$BioGeoBEARS_model_object@params_table["j", "est"] <- 0.0001
+
+check_BioGeoBEARS_run(bgb_decj)
+
+resfn_decj <- "Psychotria_DEC+J_M3_constrained_v1.Rdata"
+if (!file.exists(resfn_decj) | force_recalculate) {
+  resDECj <- bears_optim_run(bgb_decj)
+  save(resDECj, file=resfn_decj)
+} else {
+  load(resfn_decj)
+}
+
+pdf("Psychotria_DEC_vs_DEC+J_M3_constrained_v1.pdf", width=8.5, height=11)
+analysis_titletxt ="BioGeoBEARS DEC on Psychotria M3_constrained"
+plot_BioGeoBEARS_results(resDEC, analysis_titletxt, addl_params=list("j"), plotwhat="text", label.offset=0.45, tipcex=0.7, statecex=0.7, splitcex=0.6, titlecex=0.8, plotsplits=TRUE, cornercoords_loc=scriptdir, include_null_range=TRUE, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDEC, analysis_titletxt, addl_params=list("j"), plotwhat="pie", label.offset=0.45, tipcex=0.7, statecex=0.7, splitcex=0.6, titlecex=0.8, plotsplits=TRUE, cornercoords_loc=scriptdir, include_null_range=TRUE, tr=tr, tipranges=tipranges)
+
+analysis_titletxt ="BioGeoBEARS DEC+J on Psychotria M3_constrained"
+plot_BioGeoBEARS_results(resDECj, analysis_titletxt, addl_params=list("j"), plotwhat="text", label.offset=0.45, tipcex=0.7, statecex=0.7, splitcex=0.6, titlecex=0.8, plotsplits=TRUE, cornercoords_loc=scriptdir, include_null_range=TRUE, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDECj, analysis_titletxt, addl_params=list("j"), plotwhat="pie", label.offset=0.45, tipcex=0.7, statecex=0.7, splitcex=0.6, titlecex=0.8, plotsplits=TRUE, cornercoords_loc=scriptdir, include_null_range=TRUE, tr=tr, tipranges=tipranges)
+dev.off()
+
+
+#######################################################
+# DIVALIKE AND DIVALIKE+J ANALYSIS
+#######################################################
+
+# --- Run DIVALIKE ---
+bgb_diva <- setup_base_bgb_M3(trfn, geogfn, max_range_size)
+
+bgb_diva$BioGeoBEARS_model_object@params_table["s", "type"] <- "fixed"
+bgb_diva$BioGeoBEARS_model_object@params_table["s", "init"] <- 0.0
+bgb_diva$BioGeoBEARS_model_object@params_table["s", "est"] <- 0.0
+
+bgb_diva$BioGeoBEARS_model_object@params_table["ysv", "type"] <- "2-j"
+bgb_diva$BioGeoBEARS_model_object@params_table["ys", "type"] <- "ysv*1/2"
+bgb_diva$BioGeoBEARS_model_object@params_table["y", "type"] <- "ysv*1/2"
+bgb_diva$BioGeoBEARS_model_object@params_table["v", "type"] <- "ysv*1/2"
+
+bgb_diva$BioGeoBEARS_model_object@params_table["mx01v", "type"] <- "fixed"
+bgb_diva$BioGeoBEARS_model_object@params_table["mx01v", "init"] <- 0.5
+bgb_diva$BioGeoBEARS_model_object@params_table["mx01v", "est"] <- 0.5
+
+check_BioGeoBEARS_run(bgb_diva)
+
+resfn_diva <- "Psychotria_DIVALIKE_M3_constrained_v1.Rdata"
+if (!file.exists(resfn_diva) | force_recalculate) {
+  resDIVALIKE <- bears_optim_run(bgb_diva)
+  save(resDIVALIKE, file=resfn_diva)
+} else {
+  load(resfn_diva)
+}
+
+# --- Run DIVALIKE+J ---
+bgb_divaj <- setup_base_bgb_M3(trfn, geogfn, max_range_size)
+
+dstart <- resDIVALIKE$outputs@params_table["d","est"]
+estart <- resDIVALIKE$outputs@params_table["e","est"]
+
+bgb_divaj$BioGeoBEARS_model_object@params_table["d", "init"] <- dstart
+bgb_divaj$BioGeoBEARS_model_object@params_table["d", "est"] <- dstart
+bgb_divaj$BioGeoBEARS_model_object@params_table["e", "init"] <- estart
+bgb_divaj$BioGeoBEARS_model_object@params_table["e", "est"] <- estart
+
+bgb_divaj$BioGeoBEARS_model_object@params_table["s", "type"] <- "fixed"
+bgb_divaj$BioGeoBEARS_model_object@params_table["s", "init"] <- 0.0
+bgb_divaj$BioGeoBEARS_model_object@params_table["s", "est"] <- 0.0
+
+bgb_divaj$BioGeoBEARS_model_object@params_table["ysv", "type"] <- "2-j"
+bgb_divaj$BioGeoBEARS_model_object@params_table["ys", "type"] <- "ysv*1/2"
+bgb_divaj$BioGeoBEARS_model_object@params_table["y", "type"] <- "ysv*1/2"
+bgb_divaj$BioGeoBEARS_model_object@params_table["v", "type"] <- "ysv*1/2"
+
+bgb_divaj$BioGeoBEARS_model_object@params_table["mx01v", "type"] <- "fixed"
+bgb_divaj$BioGeoBEARS_model_object@params_table["mx01v", "init"] <- 0.5
+bgb_divaj$BioGeoBEARS_model_object@params_table["mx01v", "est"] <- 0.5
+
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "type"] <- "free"
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "init"] <- 0.0001
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "est"] <- 0.0001
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "min"] <- 0.00001
+bgb_divaj$BioGeoBEARS_model_object@params_table["j", "max"] <- 1.99999
+
+check_BioGeoBEARS_run(bgb_divaj)
+
+resfn_divaj <- "Psychotria_DIVALIKE+J_M3_constrained_v1.Rdata"
+if (!file.exists(resfn_divaj) | force_recalculate) {
+  resDIVALIKEj <- bears_optim_run(bgb_divaj)
+  save(resDIVALIKEj, file=resfn_divaj)
+} else {
+  load(resfn_divaj)
+}
+
+pdf("Psychotria_DIVALIKE_vs_DIVALIKE+J_M3_constrained_v1.pdf", width=8.5, height=11)
+analysis_titletxt ="BioGeoBEARS DIVALIKE on Psychotria M3_constrained"
+plot_BioGeoBEARS_results(resDIVALIKE, analysis_titletxt, addl_params=list("j"), plotwhat="text", label.offset=0.45, tipcex=0.7, statecex=0.7, splitcex=0.6, titlecex=0.8, plotsplits=TRUE, cornercoords_loc=scriptdir, include_null_range=TRUE, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDIVALIKE, analysis_titletxt, addl_params=list("j"), plotwhat="pie", label.offset=0.45, tipcex=0.7, statecex=0.7, splitcex=0.6, titlecex=0.8, plotsplits=TRUE, cornercoords_loc=scriptdir, include_null_range=TRUE, tr=tr, tipranges=tipranges)
+
+analysis_titletxt ="BioGeoBEARS DIVALIKE+J on Psychotria M3_constrained"
+plot_BioGeoBEARS_results(resDIVALIKEj, analysis_titletxt, addl_params=list("j"), plotwhat="text", label.offset=0.45, tipcex=0.7, statecex=0.7, splitcex=0.6, titlecex=0.8, plotsplits=TRUE, cornercoords_loc=scriptdir, include_null_range=TRUE, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resDIVALIKEj, analysis_titletxt, addl_params=list("j"), plotwhat="pie", label.offset=0.45, tipcex=0.7, statecex=0.7, splitcex=0.6, titlecex=0.8, plotsplits=TRUE, cornercoords_loc=scriptdir, include_null_range=TRUE, tr=tr, tipranges=tipranges)
+dev.off()
+
+
+#######################################################
+# BAYAREALIKE AND BAYAREALIKE+J ANALYSIS
+#######################################################
+
+# --- Run BAYAREALIKE ---
+bgb_bay <- setup_base_bgb_M3(trfn, geogfn, max_range_size)
+
+bgb_bay$BioGeoBEARS_model_object@params_table["s", "type"] <- "fixed"
+bgb_bay$BioGeoBEARS_model_object@params_table["s", "init"] <- 0.0
+bgb_bay$BioGeoBEARS_model_object@params_table["s", "est"] <- 0.0
+
+bgb_bay$BioGeoBEARS_model_object@params_table["v", "type"] <- "fixed"
+bgb_bay$BioGeoBEARS_model_object@params_table["v", "init"] <- 0.0
+bgb_bay$BioGeoBEARS_model_object@params_table["v", "est"] <- 0.0
+
+bgb_bay$BioGeoBEARS_model_object@params_table["ysv", "type"] <- "1-j"
+bgb_bay$BioGeoBEARS_model_object@params_table["ys", "type"] <- "ysv*1/1"
+bgb_bay$BioGeoBEARS_model_object@params_table["y", "type"] <- "1-j"
+
+bgb_bay$BioGeoBEARS_model_object@params_table["mx01y", "type"] <- "fixed"
+bgb_bay$BioGeoBEARS_model_object@params_table["mx01y", "init"] <- 0.9999
+bgb_bay$BioGeoBEARS_model_object@params_table["mx01y", "est"] <- 0.9999
+
+check_BioGeoBEARS_run(bgb_bay)
+
+resfn_bay <- "Psychotria_BAYAREALIKE_M3_constrained_v1.Rdata"
+if (!file.exists(resfn_bay) | force_recalculate) {
+  resBAYAREALIKE <- bears_optim_run(bgb_bay)
+  save(resBAYAREALIKE, file=resfn_bay)
+} else {
+  load(resfn_bay)
+}
+
+# --- Run BAYAREALIKE+J ---
+bgb_bayj <- setup_base_bgb_M3(trfn, geogfn, max_range_size)
+
+dstart <- resBAYAREALIKE$outputs@params_table["d","est"]
+estart <- resBAYAREALIKE$outputs@params_table["e","est"]
+
+bgb_bayj$BioGeoBEARS_model_object@params_table["d", "init"] <- dstart
+bgb_bayj$BioGeoBEARS_model_object@params_table["d", "est"] <- dstart
+bgb_bayj$BioGeoBEARS_model_object@params_table["e", "init"] <- estart
+bgb_bayj$BioGeoBEARS_model_object@params_table["e", "est"] <- estart
+
+bgb_bayj$BioGeoBEARS_model_object@params_table["s", "type"] <- "fixed"
+bgb_bayj$BioGeoBEARS_model_object@params_table["s", "init"] <- 0.0
+bgb_bayj$BioGeoBEARS_model_object@params_table["s", "est"] <- 0.0
+
+bgb_bayj$BioGeoBEARS_model_object@params_table["v", "type"] <- "fixed"
+bgb_bayj$BioGeoBEARS_model_object@params_table["v", "init"] <- 0.0
+bgb_bayj$BioGeoBEARS_model_object@params_table["v", "est"] <- 0.0
+
+bgb_bayj$BioGeoBEARS_model_object@params_table["ysv", "type"] <- "1-j"
+bgb_bayj$BioGeoBEARS_model_object@params_table["ys", "type"] <- "ysv*1/1"
+bgb_bayj$BioGeoBEARS_model_object@params_table["y", "type"] <- "1-j"
+
+bgb_bayj$BioGeoBEARS_model_object@params_table["mx01y", "type"] <- "fixed"
+bgb_bayj$BioGeoBEARS_model_object@params_table["mx01y", "init"] <- 0.9999
+bgb_bayj$BioGeoBEARS_model_object@params_table["mx01y", "est"] <- 0.9999
+
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "type"] <- "free"
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "init"] <- 0.0001
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "est"] <- 0.0001
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "max"] <- 0.99999
+
+bgb_bayj$BioGeoBEARS_model_object@params_table["d", "min"] <- 0.0000001
+bgb_bayj$BioGeoBEARS_model_object@params_table["d", "max"] <- 4.9999999
+bgb_bayj$BioGeoBEARS_model_object@params_table["e", "min"] <- 0.0000001
+bgb_bayj$BioGeoBEARS_model_object@params_table["e", "max"] <- 4.9999999
+bgb_bayj$BioGeoBEARS_model_object@params_table["j", "min"] <- 0.00001
+
+check_BioGeoBEARS_run(bgb_bayj)
+
+resfn_bayj <- "Psychotria_BAYAREALIKE+J_M3_constrained_v1.Rdata"
+if (!file.exists(resfn_bayj) | force_recalculate) {
+  resBAYAREALIKEj <- bears_optim_run(bgb_bayj)
+  save(resBAYAREALIKEj, file=resfn_bayj)
+} else {
+  load(resfn_bayj)
+}
+
+pdf("Psychotria_BAYAREALIKE_vs_BAYAREALIKE+J_M3_constrained_v1.pdf", width=8.5, height=11)
+analysis_titletxt ="BioGeoBEARS BAYAREALIKE on Psychotria M3_constrained"
+plot_BioGeoBEARS_results(resBAYAREALIKE, analysis_titletxt, addl_params=list("j"), plotwhat="text", label.offset=0.45, tipcex=0.7, statecex=0.7, splitcex=0.6, titlecex=0.8, plotsplits=TRUE, cornercoords_loc=scriptdir, include_null_range=TRUE, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resBAYAREALIKE, analysis_titletxt, addl_params=list("j"), plotwhat="pie", label.offset=0.45, tipcex=0.7, statecex=0.7, splitcex=0.6, titlecex=0.8, plotsplits=TRUE, cornercoords_loc=scriptdir, include_null_range=TRUE, tr=tr, tipranges=tipranges)
+
+analysis_titletxt ="BioGeoBEARS BAYAREALIKE+J on Psychotria M3_constrained"
+plot_BioGeoBEARS_results(resBAYAREALIKEj, analysis_titletxt, addl_params=list("j"), plotwhat="text", label.offset=0.45, tipcex=0.7, statecex=0.7, splitcex=0.6, titlecex=0.8, plotsplits=TRUE, cornercoords_loc=scriptdir, include_null_range=TRUE, tr=tr, tipranges=tipranges)
+plot_BioGeoBEARS_results(resBAYAREALIKEj, analysis_titletxt, addl_params=list("j"), plotwhat="pie", label.offset=0.45, tipcex=0.7, statecex=0.7, splitcex=0.6, titlecex=0.8, plotsplits=TRUE, cornercoords_loc=scriptdir, include_null_range=TRUE, tr=tr, tipranges=tipranges)
+dev.off()
+
+#########################################################################
+# CALCULATE SUMMARY STATISTICS TO COMPARE
+#########################################################################
+
+restable <- NULL
+teststable <- NULL
+
+# Extract parameters function
+extract_params <- function(res_obj) {
+  extract_params_from_BioGeoBEARS_results_object(results_object=res_obj, returnwhat="table", addl_params=c("j"), paramsstr_digits=4)
+}
+
+# --- DEC vs DEC+J ---
+LnL_dec <- get_LnL_from_BioGeoBEARS_results_object(resDEC)
+LnL_decj <- get_LnL_from_BioGeoBEARS_results_object(resDECj)
+stats_dec <- AICstats_2models(LnL_decj, LnL_dec, 3, 2)
+restable <- rbind(restable, extract_params(resDEC), extract_params(resDECj))
+teststable <- rbind(teststable, conditional_format_table(stats_dec))
+
+# --- DIVALIKE vs DIVALIKE+J ---
+LnL_diva <- get_LnL_from_BioGeoBEARS_results_object(resDIVALIKE)
+LnL_divaj <- get_LnL_from_BioGeoBEARS_results_object(resDIVALIKEj)
+stats_diva <- AICstats_2models(LnL_divaj, LnL_diva, 3, 2)
+restable <- rbind(restable, extract_params(resDIVALIKE), extract_params(resDIVALIKEj))
+teststable <- rbind(teststable, conditional_format_table(stats_diva))
+
+# --- BAYAREALIKE vs BAYAREALIKE+J ---
+LnL_bay <- get_LnL_from_BioGeoBEARS_results_object(resBAYAREALIKE)
+LnL_bayj <- get_LnL_from_BioGeoBEARS_results_object(resBAYAREALIKEj)
+stats_bay <- AICstats_2models(LnL_bayj, LnL_bay, 3, 2)
+restable <- rbind(restable, extract_params(resBAYAREALIKE), extract_params(resBAYAREALIKEj))
+teststable <- rbind(teststable, conditional_format_table(stats_bay))
+
+# Format tables
+teststable$alt <- c("DEC+J", "DIVALIKE+J", "BAYAREALIKE+J")
+teststable$null <- c("DEC", "DIVALIKE", "BAYAREALIKE")
+row.names(restable) <- c("DEC", "DEC+J", "DIVALIKE", "DIVALIKE+J", "BAYAREALIKE", "BAYAREALIKE+J")
+
+# Print results
+print(restable)
+print(teststable)
+
+# Save tables
+save(restable, file="restable_M3_constrained_v1.Rdata")
+save(teststable, file="teststable_M3_constrained_v1.Rdata")
+
+```
+
+
+Comparamos todos los modelos
+
+```{r}
+################################################################################
+# GLOBAL MODEL COMPARISON (AIC WEIGHTS)
+# Comparing M0, M1, M2, and M3 settings
+################################################################################
+
+# Load the required function from BioGeoBEARS (if not already loaded)
+library(BioGeoBEARS)
+
+# 1. Load the results tables from the previous runs
+
+# M0 (Unconstrained)
+load("restable_M0_unconstrained_v1.Rdata")
+restable_M0 <- restable
+rownames(restable_M0) <- paste0("M0_", rownames(restable_M0)) # Add prefix
+
+# M1 (Constrained max range = 2)
+load("restable_M1_constrained_v1.Rdata")
+restable_M1 <- restable
+rownames(restable_M1) <- paste0("M1_", rownames(restable_M1))
+
+# M2 (Stepping Stones)
+load("restable_M2_constrained_v1.Rdata")
+restable_M2 <- restable
+rownames(restable_M2) <- paste0("M2_", rownames(restable_M2))
+
+# M3 (Stratified)
+load("restable_M3_constrained_v1.Rdata") # Make sure the M3 file is correctly named here
+restable_M3 <- restable
+rownames(restable_M3) <- paste0("M3_", rownames(restable_M3))
+
+# 2. Combine all tables into a single master table (24 rows)
+master_restable <- rbind(restable_M0, restable_M1, restable_M2, restable_M3)
+
+# 3. Calculate AIC for all models
+# AIC = 2*k - 2*LnL  (where k is the number of parameters)
+AIC_values <- 2 * master_restable$numparams - 2 * master_restable$LnL
+master_restable$AIC <- AIC_values
+
+# 4. Calculate AIC differences (Delta AIC)
+# The best model has the lowest AIC. Delta AIC is the difference between each model and the best one.
+min_AIC <- min(AIC_values)
+master_restable$deltaAIC <- AIC_values - min_AIC
+
+# 5. Calculate Relative Likelihoods of the models
+# exp(-0.5 * deltaAIC)
+rel_likes <- exp(-0.5 * master_restable$deltaAIC)
+
+# 6. Calculate AIC Weights
+# AIC weight represents the probability that a given model is the best among the set of candidate models.
+master_restable$AIC_weight <- rel_likes / sum(rel_likes)
+
+# 7. Sort the table from best model (highest weight) to worst
+master_restable_sorted <- master_restable[order(master_restable$AIC_weight, decreasing = TRUE), ]
+
+# Print the final formatted table
+print(conditional_format_table(master_restable_sorted))
+
+# Save the final comparison
+save(master_restable_sorted, file="Global_Model_Comparison_M0_M1_M2_M3.Rdata")
+write.table(master_restable_sorted, file="Global_Model_Comparison_M0_M1_M2_M3.txt", sep="\t", quote=FALSE)
+```
+
+
+
+Finalmente, vamos a hacer mapeo estocástico usando el mejor modelo inferido (según AIC es el modelo DEC+J y con steeping stones)
+
+```{r}
+
+#######################################################
+# Run DEC+J
+#######################################################
+BioGeoBEARS_run_object = define_BioGeoBEARS_run()
+BioGeoBEARS_run_object$trfn = trfn
+BioGeoBEARS_run_object$geogfn = geogfn
+BioGeoBEARS_run_object$max_range_size = max_range_size
+
+# Set up the stratified part
+#BioGeoBEARS_run_object$timesfn = "timeperiods.txt"
+BioGeoBEARS_run_object$dispersal_multipliers_fn = "Psychotria-steppingstone-dispersal.txt"
+#BioGeoBEARS_run_object$areas_allowed_fn = "areas_allowed.txt"
+#BioGeoBEARS_run_object$areas_adjacency_fn = "areas_adjacency.txt"
+#BioGeoBEARS_run_object$distsfn = "distances_matrix.txt"
+# See notes on the distances model on PhyloWiki's BioGeoBEARS updates page.
+
+BioGeoBEARS_run_object$speedup=TRUE          # shorcuts to speed ML search; use FALSE if worried (e.g. >3 params)
+BioGeoBEARS_run_object$use_optimx = TRUE
+BioGeoBEARS_run_object$num_cores_to_use=1
+BioGeoBEARS_run_object$force_sparse=FALSE    # sparse=FALSE causes pathology & isn't much faster at this scale
+BioGeoBEARS_run_object$calc_ancprobs=TRUE    # get ancestral states from optim run
+
+# This function loads the dispersal multiplier matrix etc. from the text files into the model object. Required for these to work!
+# (It also runs some checks on these inputs for certain errors.)
+BioGeoBEARS_run_object = readfiles_BioGeoBEARS_run(BioGeoBEARS_run_object)
+
+# Divide the tree up by timeperiods/strata (uncomment this for stratified analysis)
+#BioGeoBEARS_run_object = section_the_tree(inputs=BioGeoBEARS_run_object, make_master_table=TRUE, plot_pieces=FALSE)
+# The stratified tree is described in this table:
+#BioGeoBEARS_run_object$master_table
+
+# Good default settings to get ancestral states
+BioGeoBEARS_run_object$return_condlikes_table = TRUE
+BioGeoBEARS_run_object$calc_TTL_loglike_from_condlikes_table = TRUE
+BioGeoBEARS_run_object$calc_ancprobs = TRUE
+
+# Set up DEC+J model
+# Get the ML parameter values from the 2-parameter nested model
+# (this will ensure that the 3-parameter model always does at least as good)
+dstart = resDEC$outputs@params_table["d","est"]
+estart = resDEC$outputs@params_table["e","est"]
+jstart = 0.0001
+
+# Input starting values for d, e
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["d","init"] = dstart
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["d","est"] = dstart
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["e","init"] = estart
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["e","est"] = estart
+
+# Add j as a free parameter
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["j","type"] = "free"
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["j","init"] = jstart
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["j","est"] = jstart
+
+check_BioGeoBEARS_run(BioGeoBEARS_run_object)
+
+resfn = "Psychotria_DEC+J_M2_constrained_v1.Rdata"
+runslow = TRUE
+if (runslow)
+    {
+    #sourceall("/Dropbox/_njm/__packages/BioGeoBEARS_setup/")
+
+    res = bears_optim_run(BioGeoBEARS_run_object)
+    res
+
+    save(res, file=resfn)
+
+    resDECj = res
+    } else {
+    # Loads to "res"
+    load(resfn)
+    resDECj = res
+    }
+
+#######################################################
+# Stochastic mapping on DEC M3b stratified with islands coming up
+#######################################################
+clado_events_tables = NULL
+ana_events_tables = NULL
+lnum = 0
+
+#######################################################
+# Get the inputs for Biogeographical Stochastic Mapping
+# Note: this can be slow for large state spaces and trees, since 
+# the independent likelihoods for each branch are being pre-calculated
+# E.g., for 10 areas, this requires calculation of a 1024x1024 matrix
+# for each branch.  On a tree with ~800 tips and thus ~1600 branches, this was about 1.6 gigs
+# for storage of "BSM_inputs_file.Rdata".
+# Update: 2015-09-23 -- now, if you used multicore functionality for the ML analysis,
+# the same settings will be used for get_inputs_for_stochastic_mapping().
+#######################################################
+BSM_inputs_fn = "BSM_inputs_file.Rdata"
+runInputsSlow = TRUE
+if (runInputsSlow)
+    {
+    stochastic_mapping_inputs_list = get_inputs_for_stochastic_mapping(res=res)
+    save(stochastic_mapping_inputs_list, file=BSM_inputs_fn)
+    } else {
+    # Loads to "stochastic_mapping_inputs_list"
+    load(BSM_inputs_fn)
+    } # END if (runInputsSlow)
+
+# Check inputs (doesn't work the same on unconstr)
+names(stochastic_mapping_inputs_list)
+stochastic_mapping_inputs_list$phy2
+stochastic_mapping_inputs_list$COO_weights_columnar
+stochastic_mapping_inputs_list$unconstr
+set.seed(seed=as.numeric(Sys.time()))
+
+runBSMslow = TRUE
+if (runBSMslow == TRUE)
+    {
+    # Saves to: RES_clado_events_tables.Rdata
+    # Saves to: RES_ana_events_tables.Rdata
+        # Bug check:
+        # stochastic_mapping_inputs_list=stochastic_mapping_inputs_list; maxnum_maps_to_try=100; nummaps_goal=50; maxtries_per_branch=40000; save_after_every_try=TRUE; savedir=getwd(); seedval=12345; wait_before_save=0.01; master_nodenum_toPrint=0
+
+    BSM_output = runBSM(res, stochastic_mapping_inputs_list=stochastic_mapping_inputs_list, maxnum_maps_to_try=100, nummaps_goal=50, maxtries_per_branch=40000, save_after_every_try=TRUE, savedir=getwd(), seedval=12345, wait_before_save=0.01, master_nodenum_toPrint=0)
+
+    RES_clado_events_tables = BSM_output$RES_clado_events_tables
+    RES_ana_events_tables = BSM_output$RES_ana_events_tables
+    } else {
+    # Load previously saved...
+
+    # Loads to: RES_clado_events_tables
+    load(file="RES_clado_events_tables.Rdata")
+    # Loads to: RES_ana_events_tables
+    load(file="RES_ana_events_tables.Rdata")
+    BSM_output = NULL
+    BSM_output$RES_clado_events_tables = RES_clado_events_tables
+    BSM_output$RES_ana_events_tables = RES_ana_events_tables
+    } # END if (runBSMslow == TRUE)
+
+# Extract BSM output
+clado_events_tables = BSM_output$RES_clado_events_tables
+ana_events_tables = BSM_output$RES_ana_events_tables
+head(clado_events_tables[[1]])
+head(ana_events_tables[[1]])
+length(clado_events_tables)
+length(ana_events_tables)
+
+include_null_range = TRUE
+areanames = names(tipranges@df)
+areas = areanames
+max_range_size = 2
+
+# Note: If you did something to change the states_list from the default given the number of areas, you would
+# have to manually make that change here as well! (e.g., areas_allowed matrix, or manual reduction of the states_list)
+states_list_0based = rcpp_areas_list_to_states_list(areas=areas, maxareas=max_range_size, include_null_range=include_null_range)
+
+colors_list_for_states = get_colors_for_states_list_0based(areanames=areanames, states_list_0based=states_list_0based, max_range_size=max_range_size, plot_null_range=TRUE)
+
+############################################
+# Setup for painting a single stochastic map
+############################################
+scriptdir = np(system.file("extdata/a_scripts", package="BioGeoBEARS"))
+stratified = FALSE
+clado_events_table = clado_events_tables[[1]]
+ana_events_table = ana_events_tables[[1]]
+
+# cols_to_get = names(clado_events_table[,-ncol(clado_events_table)])
+# colnums = match(cols_to_get, names(ana_events_table))
+# ana_events_table_cols_to_add = ana_events_table[,colnums]
+# anagenetic_events_txt_below_node = rep("none", nrow(ana_events_table_cols_to_add))
+# ana_events_table_cols_to_add = cbind(ana_events_table_cols_to_add, anagenetic_events_txt_below_node)
+# rows_to_get_TF = ana_events_table_cols_to_add$node <= length(tr$tip.label)
+# master_table_cladogenetic_events = rbind(ana_events_table_cols_to_add[rows_to_get_TF,], clado_events_table)
+
+############################################
+# Open a PDF
+############################################
+pdffn = paste0("DEJ+J_M2_contrained", "_single_stochastic_map_n1.pdf")
+pdf(file=pdffn, height=6, width=6)
+
+# Convert the BSM into a modified res object
+master_table_cladogenetic_events = clado_events_tables[[1]]
+resmod = stochastic_map_states_into_res(res=res, master_table_cladogenetic_events=master_table_cladogenetic_events, stratified=stratified)
+
+plot_BioGeoBEARS_results(results_object=resmod, analysis_titletxt="Stochastic map", addl_params=list("j"), label.offset=0.5, plotwhat="text", cornercoords_loc=scriptdir, root.edge=TRUE, colors_list_for_states=colors_list_for_states, skiptree=FALSE, show.tip.label=TRUE)
+
+# Paint on the branch states
+paint_stochastic_map_branches(res=resmod, master_table_cladogenetic_events=master_table_cladogenetic_events, colors_list_for_states=colors_list_for_states, lwd=5, lty=par("lty"), root.edge=TRUE, stratified=stratified)
+
+plot_BioGeoBEARS_results(results_object=resmod, analysis_titletxt="Stochastic map", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, root.edge=TRUE, colors_list_for_states=colors_list_for_states, skiptree=TRUE, show.tip.label=TRUE)
+
+############################################
+# Close PDF
+############################################
+dev.off()
+#cmdstr = paste("open ", pdffn, sep="")
+#system(cmdstr)
+
+#######################################################
+# Plot all 50 stochastic maps to PDF
+#######################################################
+# Setup
+include_null_range = include_null_range
+areanames = areanames
+areas = areanames
+max_range_size = max_range_size
+states_list_0based = rcpp_areas_list_to_states_list(areas=areas, maxareas=max_range_size, include_null_range=include_null_range)
+colors_list_for_states = get_colors_for_states_list_0based(areanames=areanames, states_list_0based=states_list_0based, max_range_size=max_range_size, plot_null_range=TRUE)
+scriptdir = np(system.file("extdata/a_scripts", package="BioGeoBEARS"))
+stratified = stratified
+
+# Loop through the maps and plot to PDF
+pdffn = paste0("DEJ+J_M2_contrained", "_", length(clado_events_tables), "BSMs_v1.pdf")
+pdf(file=pdffn, height=6, width=6)
+
+nummaps_goal = 50
+for (i in 1:nummaps_goal)
+    {
+    clado_events_table = clado_events_tables[[i]]
+    analysis_titletxt = paste0("DEJ+J_M2_contrained", " - Stochastic Map #", i, "/", nummaps_goal)
+    plot_BSM(results_object=res, clado_events_table=clado_events_table, stratified=stratified, analysis_titletxt=analysis_titletxt, addl_params=list("j"), label.offset=0.5, plotwhat="text", cornercoords_loc=scriptdir, root.edge=TRUE, colors_list_for_states=colors_list_for_states, show.tip.label=TRUE, include_null_range=include_null_range)
+    } # END for (i in 1:nummaps_goal)
+
+dev.off()
+#cmdstr = paste("open ", pdffn, sep="")
+#system(cmdstr)
+
+#######################################################
+# Summarize stochastic map tables
+#######################################################
+length(clado_events_tables)
+length(ana_events_tables)
+
+head(clado_events_tables[[1]][,-20])
+tail(clado_events_tables[[1]][,-20])
+
+head(ana_events_tables[[1]])
+tail(ana_events_tables[[1]])
+
+areanames = names(tipranges@df)
+actual_names = areanames
+actual_names
+
+# Get the dmat and times (if any)
+dmat_times = get_dmat_times_from_res(res=res, numstates=NULL)
+dmat_times
+
+# Extract BSM output
+clado_events_tables = BSM_output$RES_clado_events_tables
+ana_events_tables = BSM_output$RES_ana_events_tables
+
+# Simulate the source areas
+BSMs_w_sourceAreas = simulate_source_areas_ana_clado(res, clado_events_tables, ana_events_tables, areanames)
+clado_events_tables = BSMs_w_sourceAreas$clado_events_tables
+ana_events_tables = BSMs_w_sourceAreas$ana_events_tables
+
+# Count all anagenetic and cladogenetic events
+counts_list = count_ana_clado_events(clado_events_tables, ana_events_tables, areanames, actual_names)
+
+summary_counts_BSMs = counts_list$summary_counts_BSMs
+print(conditional_format_table(summary_counts_BSMs))
+
+# Histogram of event counts
+hist_event_counts(counts_list, pdffn=paste0("DEC+J_M2_constrained", "_histograms_of_event_counts.pdf"))
+
+#######################################################
+# Print counts to files
+#######################################################
+tmpnames = names(counts_list)
+cat("\n\nWriting tables* of counts to tab-delimited text files:\n(* = Tables have dimension=2 (rows and columns). Cubes (dimension 3) and lists (dimension 1) will not be printed to text files.) \n\n")
+for (i in 1:length(tmpnames))
+    {
+    cmdtxt = paste0("item = counts_list$", tmpnames[i])
+    eval(parse(text=cmdtxt))
+
+    # Skip cubes
+    if (length(dim(item)) != 2)
+        {
+        next()
+        }
+
+    outfn = paste0(tmpnames[i], ".txt")
+    if (length(item) == 0)
+        {
+        cat(outfn, " -- NOT written, *NO* events recorded of this type", sep="")
+        cat("\n")
+        } else {
+        cat(outfn)
+        cat("\n")
+        write.table(conditional_format_table(item), file=outfn, quote=FALSE, sep="\t", col.names=TRUE, row.names=TRUE)
+        } # END if (length(item) == 0)
+    } # END for (i in 1:length(tmpnames))
+cat("...done.\n")
+
+#######################################################
+# Check that ML ancestral state/range probabilities and
+# the mean of the BSMs approximately line up
+#######################################################
+library(MultinomialCI)    # For 95% CIs on BSM counts
+check_ML_vs_BSM(res, clado_events_tables, "DEC+J_M2_constrained", tr=NULL, plot_each_node=FALSE, linreg_plot=TRUE, MultinomialCI=TRUE)
+```
+
+
+
+
+La bibliografía recomendada es la misma que para la sesión 11, pero vamos a añadir algunas referencias adicionales.
+
+BIBLIOGRAFÍA ADICIONAL
+
+Hackel, J., Vorontsova, M. S., Nanjarisoa, O. P., Hall, R. C., Razanatsoa, J., Malakasi, P., & Besnard, G. (2018). Grass diversification in Madagascar: in situ radiation of two large C3 shade clades and support for a Miocene to Pliocene origin of C4 grassy biomes. Journal of Biogeography, 45(4), 750-761.
+
+Larridon, I., Galan Diaz, J., Bauters, K., & Escudero, M. (2021). What drives diversification in a pantropical plant lineage with extraordinary capacity for long‐distance dispersal and colonization?. Journal of Biogeography, 48(1), 64-77.
+
+Larridon, I., Spalink, D., Jiménez‐Mejías, P., Márquez‐Corro, J. I., Martín‐Bravo, S., Muasya, M., & Escudero, M. (2021). The evolutionary history of sedges (Cyperaceae) in Madagascar. Journal of Biogeography, 48(4), 917-932.
+
+Maguilla, E., Escudero, M., & Luceño, M. (2018). Vicariance versus dispersal across Beringian land bridges to explain circumpolar distribution: A case study in plants with high dispersal potential. Journal of Biogeography, 45(4), 771-783.
+
+Maguilla, E., Escudero, M., Jiménez-Lobato, V., Díaz-Lifante, Z., Andrés-Camacho, C., & Arroyo, J. (2021). Polyploidy expands the range of Centaurium (Gentianaceae). Frontiers in Plant Science, 12, 650551.
+
+Maguilla, E., Escudero, M., Ruíz‐Martín, J., & Arroyo, J. (2021). Origin and diversification of flax and their relationship with heterostyly across the range. Journal of Biogeography, 48(8), 1994-2007.
+
+
+Además también la bibliografía de la sesión anterior:
+
+BIBLIOGRAFÍA BÁSICA
+
+Ree, R. H., and S. A. Smith. 2008. Maximum likelihood inference of geographic range evolution by
+dispersal, local extinction, and cladogenesis. Syst. Biol. 57:4–14.
+
+BIBLIOGRAFÍA RECOMENDADA
+
+Dupin, J., Matzke, N. J., Särkinen, T., Knapp, S., Olmstead, R. G., Bohs, L., & Smith, S. D. (2017). Bayesian estimation of the global biogeographical history of the Solanaceae. Journal of Biogeography, 44(4), 887-899.
+
+Klaus, K. V., and N. J. Matzke. 2020. Statistical comparison of trait-dependent biogeographical models
+indicates that podocarpaceae dispersal is influenced by both seed cone traits and geographical
+distance. Syst. Biol. 69:61–75.
+
+Matzke, N. J. 2012. Founder-event speciation in BioGeoBEARS package dramatically improves likeli-
+hoods and alters parameter inference in dispersal-extinction-cladogenesis (DEC) analyses. Front.
+Biogeogr 4:210.
+
+Matzke, N. J. 2013. Probabilistic historical biogeography: New models for founder-event speciation, imperfect detection, and fossils allow improved accuracy and model-testing. Front. Biogeogr. 5:242–48.
+
+Ree, R. H., B. R. Moore, C. O. Webb, and M. J. Donoghue. 2005. A likelihood framework for inferring the evolution of geographic range on phylogenetic trees. Evolution 59:2299–311.
+
+Ree, R. H., and I. Sanmartin. 2018. Conceptual and statistical problems with the DEC+J model of
+founder-event speciation and its comparison with DEC via model selection. J. Biogeogr. 45:
+741–49.
+
+Van Dam, M. H., & Matzke, N. J. (2016). Evaluating the influence of connectivity and distance on biogeographical patterns in the south‐western deserts of North America. Journal of Biogeography, 43(8), 1514-1532.
