@@ -1397,7 +1397,7 @@ save(teststable, file="teststable_M3_constrained_v1.Rdata")
 ```
 
 
-Comparamos todos los modelos
+Comparamos todos los modelos.
 
 ```{r}
 ################################################################################
@@ -1468,250 +1468,109 @@ Finalmente, vamos a hacer mapeo estocástico usando el mejor modelo inferido (se
 
 ```{r}
 
-#######################################################
-# Run DEC+J
-#######################################################
-BioGeoBEARS_run_object = define_BioGeoBEARS_run()
-BioGeoBEARS_run_object$trfn = trfn
-BioGeoBEARS_run_object$geogfn = geogfn
-BioGeoBEARS_run_object$max_range_size = max_range_size
+################################################################################
+# STOCHASTIC MAPPING (BSM) ON THE BEST INFERRED MODEL
+# Winning Model: DEC+J under M2 (Stepping Stones)
+################################################################################
 
-# Set up the stratified part
-#BioGeoBEARS_run_object$timesfn = "timeperiods.txt"
-BioGeoBEARS_run_object$dispersal_multipliers_fn = "Psychotria-steppingstone-dispersal.txt"
-#BioGeoBEARS_run_object$areas_allowed_fn = "areas_allowed.txt"
-#BioGeoBEARS_run_object$areas_adjacency_fn = "areas_adjacency.txt"
-#BioGeoBEARS_run_object$distsfn = "distances_matrix.txt"
-# See notes on the distances model on PhyloWiki's BioGeoBEARS updates page.
+library(BioGeoBEARS)
 
-BioGeoBEARS_run_object$speedup=TRUE          # shorcuts to speed ML search; use FALSE if worried (e.g. >3 params)
-BioGeoBEARS_run_object$use_optimx = TRUE
-BioGeoBEARS_run_object$num_cores_to_use=1
-BioGeoBEARS_run_object$force_sparse=FALSE    # sparse=FALSE causes pathology & isn't much faster at this scale
-BioGeoBEARS_run_object$calc_ancprobs=TRUE    # get ancestral states from optim run
+# 1. Load the winning model directly (No need to recalculate!)
+resfn_decj <- "Psychotria_DEC+J_M2_constrained_v1.Rdata"
+load(resfn_decj)
 
-# This function loads the dispersal multiplier matrix etc. from the text files into the model object. Required for these to work!
-# (It also runs some checks on these inputs for certain errors.)
-BioGeoBEARS_run_object = readfiles_BioGeoBEARS_run(BioGeoBEARS_run_object)
-
-# Divide the tree up by timeperiods/strata (uncomment this for stratified analysis)
-#BioGeoBEARS_run_object = section_the_tree(inputs=BioGeoBEARS_run_object, make_master_table=TRUE, plot_pieces=FALSE)
-# The stratified tree is described in this table:
-#BioGeoBEARS_run_object$master_table
-
-# Good default settings to get ancestral states
-BioGeoBEARS_run_object$return_condlikes_table = TRUE
-BioGeoBEARS_run_object$calc_TTL_loglike_from_condlikes_table = TRUE
-BioGeoBEARS_run_object$calc_ancprobs = TRUE
-
-# Set up DEC+J model
-# Get the ML parameter values from the 2-parameter nested model
-# (this will ensure that the 3-parameter model always does at least as good)
-dstart = resDEC$outputs@params_table["d","est"]
-estart = resDEC$outputs@params_table["e","est"]
-jstart = 0.0001
-
-# Input starting values for d, e
-BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["d","init"] = dstart
-BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["d","est"] = dstart
-BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["e","init"] = estart
-BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["e","est"] = estart
-
-# Add j as a free parameter
-BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["j","type"] = "free"
-BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["j","init"] = jstart
-BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["j","est"] = jstart
-
-check_BioGeoBEARS_run(BioGeoBEARS_run_object)
-
-resfn = "Psychotria_DEC+J_M2_constrained_v1.Rdata"
-runslow = TRUE
-if (runslow)
-    {
-    #sourceall("/Dropbox/_njm/__packages/BioGeoBEARS_setup/")
-
-    res = bears_optim_run(BioGeoBEARS_run_object)
-    res
-
-    save(res, file=resfn)
-
-    resDECj = res
-    } else {
-    # Loads to "res"
-    load(resfn)
-    resDECj = res
-    }
-
-#######################################################
-# Stochastic mapping on DEC M3b stratified with islands coming up
-#######################################################
-clado_events_tables = NULL
-ana_events_tables = NULL
-lnum = 0
+# BioGeoBEARS stochastic mapping functions expect the model object to be named 'res'
+res <- resDECj 
 
 #######################################################
 # Get the inputs for Biogeographical Stochastic Mapping
-# Note: this can be slow for large state spaces and trees, since 
-# the independent likelihoods for each branch are being pre-calculated
-# E.g., for 10 areas, this requires calculation of a 1024x1024 matrix
-# for each branch.  On a tree with ~800 tips and thus ~1600 branches, this was about 1.6 gigs
-# for storage of "BSM_inputs_file.Rdata".
-# Update: 2015-09-23 -- now, if you used multicore functionality for the ML analysis,
-# the same settings will be used for get_inputs_for_stochastic_mapping().
 #######################################################
 BSM_inputs_fn = "BSM_inputs_file.Rdata"
 runInputsSlow = TRUE
-if (runInputsSlow)
-    {
+
+if (runInputsSlow) {
     stochastic_mapping_inputs_list = get_inputs_for_stochastic_mapping(res=res)
     save(stochastic_mapping_inputs_list, file=BSM_inputs_fn)
-    } else {
-    # Loads to "stochastic_mapping_inputs_list"
+} else {
     load(BSM_inputs_fn)
-    } # END if (runInputsSlow)
+}
 
-# Check inputs (doesn't work the same on unconstr)
-names(stochastic_mapping_inputs_list)
-stochastic_mapping_inputs_list$phy2
-stochastic_mapping_inputs_list$COO_weights_columnar
-stochastic_mapping_inputs_list$unconstr
+# Set seed for reproducibility
 set.seed(seed=as.numeric(Sys.time()))
 
+#######################################################
+# Run the Biogeographical Stochastic Mapping (50 maps)
+#######################################################
 runBSMslow = TRUE
-if (runBSMslow == TRUE)
-    {
-    # Saves to: RES_clado_events_tables.Rdata
-    # Saves to: RES_ana_events_tables.Rdata
-        # Bug check:
-        # stochastic_mapping_inputs_list=stochastic_mapping_inputs_list; maxnum_maps_to_try=100; nummaps_goal=50; maxtries_per_branch=40000; save_after_every_try=TRUE; savedir=getwd(); seedval=12345; wait_before_save=0.01; master_nodenum_toPrint=0
 
+if (runBSMslow == TRUE) {
+    # Generate 50 stochastic maps
     BSM_output = runBSM(res, stochastic_mapping_inputs_list=stochastic_mapping_inputs_list, maxnum_maps_to_try=100, nummaps_goal=50, maxtries_per_branch=40000, save_after_every_try=TRUE, savedir=getwd(), seedval=12345, wait_before_save=0.01, master_nodenum_toPrint=0)
-
+    
     RES_clado_events_tables = BSM_output$RES_clado_events_tables
     RES_ana_events_tables = BSM_output$RES_ana_events_tables
-    } else {
-    # Load previously saved...
-
-    # Loads to: RES_clado_events_tables
+} else {
+    # Load previously saved maps
     load(file="RES_clado_events_tables.Rdata")
-    # Loads to: RES_ana_events_tables
     load(file="RES_ana_events_tables.Rdata")
-    BSM_output = NULL
+    BSM_output = list()
     BSM_output$RES_clado_events_tables = RES_clado_events_tables
     BSM_output$RES_ana_events_tables = RES_ana_events_tables
-    } # END if (runBSMslow == TRUE)
+}
 
-# Extract BSM output
+# Extract BSM output tables
 clado_events_tables = BSM_output$RES_clado_events_tables
 ana_events_tables = BSM_output$RES_ana_events_tables
-head(clado_events_tables[[1]])
-head(ana_events_tables[[1]])
-length(clado_events_tables)
-length(ana_events_tables)
 
+#######################################################
+# Setup colors and states for plotting
+#######################################################
 include_null_range = TRUE
 areanames = names(tipranges@df)
 areas = areanames
 max_range_size = 2
 
-# Note: If you did something to change the states_list from the default given the number of areas, you would
-# have to manually make that change here as well! (e.g., areas_allowed matrix, or manual reduction of the states_list)
 states_list_0based = rcpp_areas_list_to_states_list(areas=areas, maxareas=max_range_size, include_null_range=include_null_range)
-
 colors_list_for_states = get_colors_for_states_list_0based(areanames=areanames, states_list_0based=states_list_0based, max_range_size=max_range_size, plot_null_range=TRUE)
 
-############################################
-# Setup for painting a single stochastic map
-############################################
-scriptdir = np(system.file("extdata/a_scripts", package="BioGeoBEARS"))
-stratified = FALSE
-clado_events_table = clado_events_tables[[1]]
-ana_events_table = ana_events_tables[[1]]
+scriptdir = normalizePath(system.file("extdata/a_scripts", package="BioGeoBEARS"))
+stratified = FALSE # M2 is spatial constraint, not time-stratified
 
-# cols_to_get = names(clado_events_table[,-ncol(clado_events_table)])
-# colnums = match(cols_to_get, names(ana_events_table))
-# ana_events_table_cols_to_add = ana_events_table[,colnums]
-# anagenetic_events_txt_below_node = rep("none", nrow(ana_events_table_cols_to_add))
-# ana_events_table_cols_to_add = cbind(ana_events_table_cols_to_add, anagenetic_events_txt_below_node)
-# rows_to_get_TF = ana_events_table_cols_to_add$node <= length(tr$tip.label)
-# master_table_cladogenetic_events = rbind(ana_events_table_cols_to_add[rows_to_get_TF,], clado_events_table)
+#######################################################
+# Plot a single stochastic map
+#######################################################
+pdffn_single = "Psychotria_DEC+J_M2_constrained_single_stochastic_map_n1.pdf"
+pdf(file=pdffn_single, height=6, width=6)
 
-############################################
-# Open a PDF
-############################################
-pdffn = paste0("DEJ+J_M2_contrained", "_single_stochastic_map_n1.pdf")
-pdf(file=pdffn, height=6, width=6)
-
-# Convert the BSM into a modified res object
 master_table_cladogenetic_events = clado_events_tables[[1]]
 resmod = stochastic_map_states_into_res(res=res, master_table_cladogenetic_events=master_table_cladogenetic_events, stratified=stratified)
 
 plot_BioGeoBEARS_results(results_object=resmod, analysis_titletxt="Stochastic map", addl_params=list("j"), label.offset=0.5, plotwhat="text", cornercoords_loc=scriptdir, root.edge=TRUE, colors_list_for_states=colors_list_for_states, skiptree=FALSE, show.tip.label=TRUE)
 
-# Paint on the branch states
 paint_stochastic_map_branches(res=resmod, master_table_cladogenetic_events=master_table_cladogenetic_events, colors_list_for_states=colors_list_for_states, lwd=5, lty=par("lty"), root.edge=TRUE, stratified=stratified)
 
 plot_BioGeoBEARS_results(results_object=resmod, analysis_titletxt="Stochastic map", addl_params=list("j"), plotwhat="text", cornercoords_loc=scriptdir, root.edge=TRUE, colors_list_for_states=colors_list_for_states, skiptree=TRUE, show.tip.label=TRUE)
 
-############################################
-# Close PDF
-############################################
 dev.off()
-#cmdstr = paste("open ", pdffn, sep="")
-#system(cmdstr)
 
 #######################################################
-# Plot all 50 stochastic maps to PDF
+# Plot all 50 stochastic maps
 #######################################################
-# Setup
-include_null_range = include_null_range
-areanames = areanames
-areas = areanames
-max_range_size = max_range_size
-states_list_0based = rcpp_areas_list_to_states_list(areas=areas, maxareas=max_range_size, include_null_range=include_null_range)
-colors_list_for_states = get_colors_for_states_list_0based(areanames=areanames, states_list_0based=states_list_0based, max_range_size=max_range_size, plot_null_range=TRUE)
-scriptdir = np(system.file("extdata/a_scripts", package="BioGeoBEARS"))
-stratified = stratified
-
-# Loop through the maps and plot to PDF
-pdffn = paste0("DEJ+J_M2_contrained", "_", length(clado_events_tables), "BSMs_v1.pdf")
-pdf(file=pdffn, height=6, width=6)
+pdffn_all = paste0("Psychotria_DEC+J_M2_constrained_", length(clado_events_tables), "BSMs.pdf")
+pdf(file=pdffn_all, height=6, width=6)
 
 nummaps_goal = 50
-for (i in 1:nummaps_goal)
-    {
+for (i in 1:nummaps_goal) {
     clado_events_table = clado_events_tables[[i]]
-    analysis_titletxt = paste0("DEJ+J_M2_contrained", " - Stochastic Map #", i, "/", nummaps_goal)
+    analysis_titletxt = paste0("DEC+J M2 - Stochastic Map #", i, "/", nummaps_goal)
     plot_BSM(results_object=res, clado_events_table=clado_events_table, stratified=stratified, analysis_titletxt=analysis_titletxt, addl_params=list("j"), label.offset=0.5, plotwhat="text", cornercoords_loc=scriptdir, root.edge=TRUE, colors_list_for_states=colors_list_for_states, show.tip.label=TRUE, include_null_range=include_null_range)
-    } # END for (i in 1:nummaps_goal)
-
+}
 dev.off()
-#cmdstr = paste("open ", pdffn, sep="")
-#system(cmdstr)
 
 #######################################################
-# Summarize stochastic map tables
+# Summarize stochastic map tables & counts
 #######################################################
-length(clado_events_tables)
-length(ana_events_tables)
-
-head(clado_events_tables[[1]][,-20])
-tail(clado_events_tables[[1]][,-20])
-
-head(ana_events_tables[[1]])
-tail(ana_events_tables[[1]])
-
-areanames = names(tipranges@df)
 actual_names = areanames
-actual_names
-
-# Get the dmat and times (if any)
-dmat_times = get_dmat_times_from_res(res=res, numstates=NULL)
-dmat_times
-
-# Extract BSM output
-clado_events_tables = BSM_output$RES_clado_events_tables
-ana_events_tables = BSM_output$RES_ana_events_tables
 
 # Simulate the source areas
 BSMs_w_sourceAreas = simulate_source_areas_ana_clado(res, clado_events_tables, ana_events_tables, areanames)
@@ -1725,43 +1584,36 @@ summary_counts_BSMs = counts_list$summary_counts_BSMs
 print(conditional_format_table(summary_counts_BSMs))
 
 # Histogram of event counts
-hist_event_counts(counts_list, pdffn=paste0("DEC+J_M2_constrained", "_histograms_of_event_counts.pdf"))
+hist_event_counts(counts_list, pdffn="Psychotria_DEC+J_M2_constrained_histograms_of_event_counts.pdf")
 
 #######################################################
 # Print counts to files
 #######################################################
 tmpnames = names(counts_list)
-cat("\n\nWriting tables* of counts to tab-delimited text files:\n(* = Tables have dimension=2 (rows and columns). Cubes (dimension 3) and lists (dimension 1) will not be printed to text files.) \n\n")
-for (i in 1:length(tmpnames))
-    {
+cat("\n\nWriting tables of counts to tab-delimited text files...\n\n")
+for (i in 1:length(tmpnames)) {
     cmdtxt = paste0("item = counts_list$", tmpnames[i])
     eval(parse(text=cmdtxt))
 
-    # Skip cubes
-    if (length(dim(item)) != 2)
-        {
-        next()
-        }
+    # Skip cubes (3D matrices)
+    if (length(dim(item)) != 2) next()
 
-    outfn = paste0(tmpnames[i], ".txt")
-    if (length(item) == 0)
-        {
-        cat(outfn, " -- NOT written, *NO* events recorded of this type", sep="")
-        cat("\n")
-        } else {
-        cat(outfn)
-        cat("\n")
+    outfn = paste0("Psychotria_DEC+J_M2_constrained_", tmpnames[i], ".txt")
+    if (length(item) == 0) {
+        cat(outfn, " -- NOT written, *NO* events recorded of this type\n", sep="")
+    } else {
         write.table(conditional_format_table(item), file=outfn, quote=FALSE, sep="\t", col.names=TRUE, row.names=TRUE)
-        } # END if (length(item) == 0)
-    } # END for (i in 1:length(tmpnames))
+        cat(outfn, " -- Written.\n", sep="")
+    }
+}
 cat("...done.\n")
 
 #######################################################
-# Check that ML ancestral state/range probabilities and
-# the mean of the BSMs approximately line up
+# Check ML vs BSM consistency
 #######################################################
-library(MultinomialCI)    # For 95% CIs on BSM counts
+library(MultinomialCI)    # Required for 95% CIs on BSM counts
 check_ML_vs_BSM(res, clado_events_tables, "DEC+J_M2_constrained", tr=NULL, plot_each_node=FALSE, linreg_plot=TRUE, MultinomialCI=TRUE)
+
 ```
 
 
